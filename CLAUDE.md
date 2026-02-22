@@ -151,13 +151,30 @@ When making changes that affect latency (buffer sizes, pacing, ALSA config, jitt
 - System volume/mute integration
 - Real end-to-end latency measurement
 
-## Build & Install (future)
+## Build & Install
 
 Driver bundle installs to: `/Library/Audio/Plug-Ins/HAL/Zinkos.driver`
-Restart coreaudiod: `sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod`
+
+## CLI Tool (`zinkos`)
+
+Located at `scripts/zinkos`. Install system-wide with `zinkos install` (symlinks to `/usr/local/bin/zinkos`).
+
+```
+zinkos status              # show current config + driver status
+zinkos set ip <IP>         # set receiver IP
+zinkos set port <PORT>     # set receiver port
+zinkos set latency <MS>    # set latency offset
+zinkos rebuild             # build, validate, install, and reload driver
+zinkos reload              # restart coreaudiod to pick up config changes
+zinkos install             # symlink to /usr/local/bin for global access
+zinkos uninstall           # remove the global symlink
+```
+
+Config is stored in `com.zinkos.driver` plist (via `defaults write`). Volume/mute state is persisted to `/Library/Preferences/Audio/com.zinkos.volume` (plain file, written by the driver as `_coreaudiod`).
 
 ## Commands
 
 - `cargo test` — run all engine + receiver unit tests
 - `cargo build --release` — build engine cdylib and receiver binary
 - `cmake --build build/` — build driver bundle (links against engine cdylib)
+- `zinkos rebuild` — full build + validate + install + reload cycle

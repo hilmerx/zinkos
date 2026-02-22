@@ -27,8 +27,21 @@ static const uint16_t kDefaultPort = 4010;
 static const uint32_t kDefaultLatencyOffsetMs = 0;
 static const char* kVolumeStatePath = "/Library/Preferences/Audio/com.zinkos.volume";
 
+static uint64_t sLastPersistTime = 0;
+
 static void PersistVolumeState()
 {
+    // Throttle writes — slider sends dozens of updates per second.
+    // Only write to disk at most every 500ms to avoid stalling coreaudiod.
+    uint64_t now = mach_absolute_time();
+    mach_timebase_info_data_t tbi;
+    mach_timebase_info(&tbi);
+    uint64_t elapsedNs = (now - sLastPersistTime) * tbi.numer / tbi.denom;
+    if (sLastPersistTime != 0 && elapsedNs < 500000000ULL) {
+        return;
+    }
+    sLastPersistTime = now;
+
     FILE* f = fopen(kVolumeStatePath, "w");
     if (f) {
         fprintf(f, "%.6f\n%d\n", gDriverState.volumeScalar, gDriverState.muted ? 1 : 0);
@@ -320,6 +333,11 @@ static OSStatus ZinkosStopIO(AudioServerPlugInDriverRef /*inDriver*/, AudioObjec
     }
 
     gDriverState.ioRunning = false;
+
+    // Force-save final volume (throttle may have skipped the last update)
+    sLastPersistTime = 0;
+    PersistVolumeState();
+
     os_log(sLog, "ZinkosStopIO: streaming stopped");
     return kAudioHardwareNoError;
 }
@@ -373,7 +391,8 @@ static OSStatus ZinkosDoIOOperation(AudioServerPlugInDriverRef /*inDriver*/, Aud
     Float32* floatBuf = (Float32*)ioMainBuffer;
     int16_t* intBuf = (int16_t*)ioMainBuffer; // safe: int16 is smaller than float32
 
-    Float32 gain = gDriverState.muted ? 0.0f : gDriverState.volumeScalar;
+    Float32 scalar = gDriverState.volumeScalar;
+    Float32 gain = gDriverState.muted ? 0.0f : (scalar * scalar); // quadratic curve
     UInt32 sampleCount = inIOBufferFrameSize * 2; // stereo
     for (UInt32 i = 0; i < sampleCount; i++) {
         Float32 sample = floatBuf[i] * gain;
