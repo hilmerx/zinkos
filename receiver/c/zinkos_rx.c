@@ -1,0 +1,229 @@
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <alsa/asoundlib.h>
+
+#define SAMPLE_RATE     48000
+#define CHANNELS        2
+#define BYTES_PER_SAMP  2
+#define FRAME_BYTES     (CHANNELS * BYTES_PER_SAMP)
+
+#define PORT            4010
+#define MAX_UDP_PAYLOAD 2048
+#define RING_FRAMES     (48000)
+#define HEADER_BYTES    16
+
+/* 60ms start fill = 2880 frames.
+   After ALSA pre-fill (~1680), leaves ~1200 frames cushion in ring buffer. */
+#define START_FILL_MS   15
+
+static uint8_t ring[RING_FRAMES * FRAME_BYTES];
+static volatile uint32_t wpos_frames = 0;
+static volatile uint32_t rpos_frames = 0;
+static volatile int running = 1;
+
+static inline uint32_t rb_used_frames(void) {
+  uint32_t w = __atomic_load_n(&wpos_frames, __ATOMIC_ACQUIRE);
+  uint32_t r = __atomic_load_n(&rpos_frames, __ATOMIC_ACQUIRE);
+  return (w >= r) ? (w - r) : (RING_FRAMES - (r - w));
+}
+static inline uint32_t rb_free_frames(void) {
+  return (RING_FRAMES - 1) - rb_used_frames();
+}
+
+static void rb_write_frames(const uint8_t *src, uint32_t frames) {
+  if (frames > rb_free_frames()) return;
+  uint32_t w = wpos_frames;
+  uint32_t bytes = frames * FRAME_BYTES;
+  uint32_t w_bytes = w * FRAME_BYTES;
+  uint32_t tail = (RING_FRAMES * FRAME_BYTES) - w_bytes;
+
+  if (bytes <= tail) memcpy(&ring[w_bytes], src, bytes);
+  else {
+    memcpy(&ring[w_bytes], src, tail);
+    memcpy(&ring[0], src + tail, bytes - tail);
+  }
+  __atomic_store_n(&wpos_frames, (w + frames) % RING_FRAMES, __ATOMIC_RELEASE);
+}
+
+static uint32_t rb_read_frames(uint8_t *dst, uint32_t frames) {
+  uint32_t avail = rb_used_frames();
+  if (frames > avail) frames = avail;
+
+  uint32_t r = rpos_frames;
+  uint32_t bytes = frames * FRAME_BYTES;
+  uint32_t r_bytes = r * FRAME_BYTES;
+  uint32_t tail = (RING_FRAMES * FRAME_BYTES) - r_bytes;
+
+  if (bytes <= tail) memcpy(dst, &ring[r_bytes], bytes);
+  else {
+    memcpy(dst, &ring[r_bytes], tail);
+    memcpy(dst + tail, &ring[0], bytes - tail);
+  }
+  __atomic_store_n(&rpos_frames, (r + frames) % RING_FRAMES, __ATOMIC_RELEASE);
+  return frames;
+}
+
+static void set_thread_realtime(int priority) {
+  struct sched_param sp;
+  memset(&sp, 0, sizeof(sp));
+  sp.sched_priority = priority;
+  pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+}
+
+// UDP receive thread — runs independently of ALSA playback
+static void *recv_thread(void *arg) {
+  int fd = *(int *)arg;
+  uint8_t pkt[MAX_UDP_PAYLOAD];
+
+  set_thread_realtime(70);
+
+  while (running) {
+    ssize_t n = recv(fd, pkt, sizeof(pkt), 0);
+    if (n <= 0) continue;
+    if (n <= HEADER_BYTES) continue;
+    uint8_t *pcm_data = pkt + HEADER_BYTES;
+    ssize_t pcm_len = n - HEADER_BYTES;
+    if ((pcm_len % FRAME_BYTES) != 0) continue;
+    rb_write_frames(pcm_data, (uint32_t)(pcm_len / FRAME_BYTES));
+  }
+  return NULL;
+}
+
+int main(int argc, char **argv) {
+  const char *alsa_dev = (argc > 1) ? argv[1] : "hw:0,0";
+
+  int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (fd < 0) { perror("socket"); return 1; }
+
+  int rcvbuf = 4 * 1024 * 1024;
+  setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port = htons(PORT);
+
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    perror("bind");
+    return 1;
+  }
+
+  snd_pcm_t *pcm = NULL;
+  if (snd_pcm_open(&pcm, alsa_dev, SND_PCM_STREAM_PLAYBACK, 0) < 0) {
+    fprintf(stderr, "snd_pcm_open failed for %s\n", alsa_dev);
+    return 1;
+  }
+
+  // --- HW params ---
+  snd_pcm_hw_params_t *hw;
+  snd_pcm_hw_params_alloca(&hw);
+  snd_pcm_hw_params_any(pcm, hw);
+  snd_pcm_hw_params_set_access(pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
+  snd_pcm_hw_params_set_format(pcm, hw, SND_PCM_FORMAT_S16_LE);
+  snd_pcm_hw_params_set_channels(pcm, hw, CHANNELS);
+
+  unsigned int rate = SAMPLE_RATE;
+  snd_pcm_hw_params_set_rate_near(pcm, hw, &rate, NULL);
+
+  snd_pcm_uframes_t period = 240;
+  snd_pcm_uframes_t buffer = period * 3;   // 40ms ALSA buffer
+
+  snd_pcm_hw_params_set_period_size_near(pcm, hw, &period, NULL);
+  snd_pcm_hw_params_set_buffer_size_near(pcm, hw, &buffer);
+
+  if (snd_pcm_hw_params(pcm, hw) < 0) {
+    fprintf(stderr, "snd_pcm_hw_params failed\n");
+    return 1;
+  }
+
+  snd_pcm_uframes_t actual_period, actual_buffer;
+  snd_pcm_hw_params_get_period_size(hw, &actual_period, NULL);
+  snd_pcm_hw_params_get_buffer_size(hw, &actual_buffer);
+  fprintf(stderr, "ALSA: rate=%u period=%lu buffer=%lu\n",
+          rate, actual_period, actual_buffer);
+
+  // --- SW params: don't auto-start, we start manually after pre-fill ---
+  snd_pcm_sw_params_t *sw;
+  snd_pcm_sw_params_alloca(&sw);
+  snd_pcm_sw_params_current(pcm, sw);
+  snd_pcm_sw_params_set_start_threshold(pcm, sw, actual_period);
+  snd_pcm_sw_params_set_avail_min(pcm, sw, actual_period);
+  if (snd_pcm_sw_params(pcm, sw) < 0) {
+    fprintf(stderr, "snd_pcm_sw_params failed\n");
+    return 1;
+  }
+
+  snd_pcm_prepare(pcm);
+  set_thread_realtime(60);
+
+  // Start receive thread
+  pthread_t rthr;
+  pthread_create(&rthr, NULL, recv_thread, &fd);
+
+  uint8_t out[1024 * FRAME_BYTES];
+
+  const uint32_t start_fill_frames = (START_FILL_MS * SAMPLE_RATE) / 1000;
+  fprintf(stderr, "Zinkos RX UDP :%d @ %uHz, ALSA %s, start fill ~%ums (%u frames)\n",
+          PORT, rate, alsa_dev, START_FILL_MS, start_fill_frames);
+
+  // Wait for ring buffer to accumulate enough
+  while (rb_used_frames() < start_fill_frames) {
+    usleep(1000);
+  }
+  fprintf(stderr, "Ring buffer ready: %u frames\n", rb_used_frames());
+
+  // Pre-fill ALSA buffer (but don't drain ring buffer dry)
+  snd_pcm_uframes_t prefilled = 0;
+  while (prefilled + actual_period <= actual_buffer) {
+    uint32_t avail = rb_used_frames();
+    if (avail < actual_period) break;  // keep cushion, don't drain ring buffer
+    uint32_t got = rb_read_frames(out, (uint32_t)actual_period);
+    if (got < actual_period) break;
+
+    snd_pcm_sframes_t w = snd_pcm_writei(pcm, out, actual_period);
+    if (w > 0) prefilled += w;
+    else break;
+  }
+  fprintf(stderr, "ALSA pre-filled: %lu frames, ring buffer remaining: %u frames\n",
+          prefilled, rb_used_frames());
+
+  // Start playback
+  snd_pcm_start(pcm);
+
+  while (running) {
+    uint32_t got = rb_read_frames(out, (uint32_t)actual_period);
+    if (got < actual_period)
+      memset(out + got * FRAME_BYTES, 0, (actual_period - got) * FRAME_BYTES);
+
+    snd_pcm_sframes_t w = snd_pcm_writei(pcm, out, actual_period);
+    if (w < 0) {
+      fprintf(stderr, "ALSA xrun, recovering\n");
+      w = snd_pcm_recover(pcm, w, 1);
+      if (w < 0) {
+        fprintf(stderr, "ALSA write failed: %s\n", snd_strerror(w));
+        break;
+      }
+    }
+    uint32_t fill = rb_used_frames();
+    if (fill < 200)
+        fprintf(stderr, "LOW: %u frames\n", fill);
+  }
+
+  running = 0;
+  pthread_join(rthr, NULL);
+  snd_pcm_close(pcm);
+  close(fd);
+  return 0;
+}

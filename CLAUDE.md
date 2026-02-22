@@ -79,6 +79,8 @@ Total packet size: 16-byte header + 884-byte payload = 900 bytes (well under MTU
 ```
 zinkos-driver/
   CLAUDE.md
+  Cargo.toml                 # Workspace root
+  CMakeLists.txt             # Top-level build (driver bundle + Rust)
   driver/                    # AudioServerPlugIn glue (C/C++)
     ZinkosPlugin.cpp         # Plugin entry point, QueryInterface, etc.
     ZinkosDevice.cpp         # Device/stream property handling
@@ -88,24 +90,41 @@ zinkos-driver/
     CMakeLists.txt
   engine/                    # Rust crate — testable core (cdylib)
     Cargo.toml
+    include/
+      zinkos_engine.h        # C FFI header
     src/
       lib.rs                 # FFI exports (extern "C")
+      ffi.rs                 # FFI boundary definitions
       ring_buffer.rs
       packetizer.rs
       udp_sender.rs
+      pacer.rs
       drift.rs
       state_machine.rs
       config.rs
-  receiver/                  # Rust crate — Pi receiver binary
-    Cargo.toml
+      bin/
+        sender_cli.rs        # Feed engine without driver for testing
+  receiver/                  # All receiver implementations
+    Cargo.toml               # Rust receiver crate
     src/
       main.rs
       jitter_buffer.rs
       alsa_sink.rs
-  tests/                     # Integration tests / CLI tools
-    sender_cli.rs            # Feed engine without driver for testing
-  Cargo.toml                 # Workspace root
-  CMakeLists.txt             # Top-level build (driver bundle + Rust)
+    c/                       # C receiver (production, runs on Thinkpad)
+      zinkos_rx.c            # Single-file receiver (~200 lines)
+      Makefile               # cc -O2 -o zinkos_rx zinkos_rx.c -lasound -lpthread
+      zinkos-rx.service      # systemd unit file
+  scripts/                   # CLI & build tools
+    zinkos                   # CLI tool (bash)
+    reload.sh                # Build, validate, install, reload
+    install.sh               # Install driver bundle
+    uninstall.sh             # Uninstall driver bundle
+    validate.sh              # Pre-install validation
+  tests/                     # Integration tests
+    driver_load_test.c       # dlopen/dlsym test
+  docs/
+    system-overview.md       # Full system architecture doc
+    latency-analysis.md      # Latency breakdown & tuning
 ```
 
 ## Latency
