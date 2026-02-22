@@ -1,5 +1,11 @@
 # Zinkos — Low-Latency Wi-Fi Audio Streaming Driver
 
+## Rules
+
+- Never add Co-Authored-By to commit messages
+- Never include Claude as a contributor in any form
+- Never commit or push unless explicitly asked
+
 ## Project Overview
 
 Zinkos is a macOS CoreAudio AudioServerPlugIn driver + Raspberry Pi receiver that streams system audio over Wi-Fi with low latency. The goal: select "Zinkos" in macOS Sound output and hear audio through a DAC connected to a Raspberry Pi 5.

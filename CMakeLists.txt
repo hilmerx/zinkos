@@ -4,9 +4,26 @@ project(Zinkos VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Code signing identity — Apple Development certificate required for HAL plugins
-# Code signing — use certificate SHA-1 hash to avoid shell quoting issues
-set(CODESIGN_IDENTITY "EC58FBCD3313F422A4FE36E5B5951E5A226A5748" CACHE STRING "Codesign identity (SHA-1 hash)")
+# Code signing — Apple Development certificate required for HAL plugins.
+# Auto-detect the first valid signing identity, or pass your own:
+#   cmake -DCODESIGN_IDENTITY="your-cert-hash-or-name" ..
+if(NOT DEFINED CODESIGN_IDENTITY OR CODESIGN_IDENTITY STREQUAL "")
+    execute_process(
+        COMMAND bash -c "security find-identity -v -p codesigning | grep 'Apple Development\\|Developer ID' | head -1 | sed 's/.*\\\"\\(.*\\)\\\".*/\\1/'"
+        OUTPUT_VARIABLE CODESIGN_IDENTITY
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(CODESIGN_IDENTITY STREQUAL "")
+        message(FATAL_ERROR
+            "No Apple Development certificate found.\n"
+            "You need a (free) Apple Developer account. Then:\n"
+            "  1. Open Xcode → Settings → Accounts → add your Apple ID\n"
+            "  2. Manage Certificates → + → Apple Development\n"
+            "  3. Re-run cmake\n"
+            "Or pass manually: cmake -DCODESIGN_IDENTITY=\"your cert name\" ..")
+    endif()
+endif()
+message(STATUS "Code signing identity: ${CODESIGN_IDENTITY}")
 
 # Determine Rust build profile and target directory
 option(ZINKOS_RELEASE "Build Rust in release mode" OFF)
