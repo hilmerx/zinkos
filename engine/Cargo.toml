@@ -1,0 +1,15 @@
+[package]
+name = "zinkos-engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "sender-cli"
+path = "src/bin/sender_cli.rs"
+
+[dependencies]
+rtrb = "0.3"
+libc = "0.2"

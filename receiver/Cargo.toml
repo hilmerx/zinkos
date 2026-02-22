@@ -1,0 +1,15 @@
+[package]
+name = "zinkos-receiver"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "zinkos-receiver"
+path = "src/main.rs"
+
+[dependencies]
+zinkos-engine = { path = "../engine" }
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa = "0.9"

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>Zinkos</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.zinkos.driver</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Zinkos</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <!-- AudioServerPlugIn factory function -->
+    <key>AudioServerPlugInFactoryFunction</key>
+    <string>ZinkosPlugIn_Create</string>
+    <!-- AudioServerPlugIn type UUID (required by CoreAudio) -->
+    <key>CFPlugInFactories</key>
+    <dict>
+        <!-- Factory UUID — unique to Zinkos -->
+        <key>72A0544E-3B5F-4E49-A8E5-7C3D0C1F2B3A</key>
+        <string>ZinkosPlugIn_Create</string>
+    </dict>
+    <key>CFPlugInTypes</key>
+    <dict>
+        <!-- AudioServerPlugIn type UUID (Apple-defined) -->
+        <key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+        <array>
+            <!-- Our factory UUID -->
+            <string>72A0544E-3B5F-4E49-A8E5-7C3D0C1F2B3A</string>
+        </array>
+    </dict>
+</dict>
+</plist>
