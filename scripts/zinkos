@@ -1,0 +1,235 @@
+#!/bin/bash
+#
+# zinkos — CLI tool for managing the Zinkos audio driver
+#
+
+set -euo pipefail
+
+# ── Colors ──────────────────────────────────────────────────
+AMBER='\033[38;5;172m'
+BROWN='\033[38;5;130m'
+DIM='\033[38;5;137m'
+BOLD='\033[1m'
+RESET='\033[0m'
+RED='\033[38;5;160m'
+GREEN='\033[38;5;107m'
+
+# ── Constants ───────────────────────────────────────────────
+PLIST_DOMAIN="com.zinkos.driver"
+DRIVER_PATH="/Library/Audio/Plug-Ins/HAL/Zinkos.driver"
+SYMLINK_PATH="/usr/local/bin/zinkos"
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# Follow symlink to real location
+if [ -L "$SCRIPT_PATH" ]; then
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+elif [ -L "$0" ]; then
+    SCRIPT_PATH="$(readlink "$0")"
+fi
+
+# ── Helpers ─────────────────────────────────────────────────
+
+print_logo() {
+    echo -e "${BOLD}${AMBER}"
+    echo '  ╔═══════════════════════════════════╗'
+    echo '  ║         Z I N K O S               ║'
+    echo '  ║     Wi-Fi Audio Streaming         ║'
+    echo '  ╚═══════════════════════════════════╝'
+    echo -e "${RESET}"
+}
+
+info() {
+    echo -e "  ${AMBER}▸${RESET} $1"
+}
+
+success() {
+    echo -e "  ${GREEN}✓${RESET} $1"
+}
+
+error() {
+    echo -e "  ${RED}✗${RESET} $1" >&2
+}
+
+label() {
+    printf "  ${BROWN}%-18s${RESET} " "$1"
+    echo -e "$2"
+}
+
+# Read a plist value, return empty string if not set
+plist_read() {
+    defaults read "$PLIST_DOMAIN" "$1" 2>/dev/null || echo ""
+}
+
+# ── Commands ────────────────────────────────────────────────
+
+cmd_status() {
+    print_logo
+
+    # Driver installation
+    local driver_status
+    if [ -d "$DRIVER_PATH" ]; then
+        driver_status="${GREEN}installed${RESET}"
+    else
+        driver_status="${RED}not installed${RESET}"
+    fi
+
+    # coreaudiod status
+    local coreaudiod_status
+    local pid
+    pid=$(pgrep -x coreaudiod 2>/dev/null || echo "")
+    if [ -n "$pid" ]; then
+        coreaudiod_status="${GREEN}running${RESET} (PID $pid)"
+    else
+        coreaudiod_status="${RED}not running${RESET}"
+    fi
+
+    # Config values
+    local ip port latency
+    ip=$(plist_read "ReceiverIP")
+    port=$(plist_read "ReceiverPort")
+    latency=$(plist_read "LatencyOffsetMs")
+
+    echo -e "  ${BOLD}${AMBER}── Status ──────────────────────────${RESET}"
+    echo ""
+    label "Driver:" "$(echo -e "$driver_status")"
+    label "coreaudiod:" "$(echo -e "$coreaudiod_status")"
+    echo ""
+    echo -e "  ${BOLD}${AMBER}── Config ──────────────────────────${RESET}"
+    echo ""
+    label "Receiver IP:" "${ip:-${DIM}(not set — default 192.168.1.87)${RESET}}"
+    label "Receiver Port:" "${port:-${DIM}(not set — default 4010)${RESET}}"
+    label "Latency Offset:" "${latency:+${latency} ms}${latency:-${DIM}(not set — default 0 ms)${RESET}}"
+    echo ""
+}
+
+cmd_set() {
+    local key="$1"
+    local value="$2"
+
+    case "$key" in
+        ip)
+            # Basic IP format check
+            if ! echo "$value" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                error "Invalid IP address: $value"
+                exit 1
+            fi
+            defaults write "$PLIST_DOMAIN" ReceiverIP -string "$value"
+            success "Receiver IP set to ${BOLD}$value${RESET}"
+            ;;
+        port)
+            if ! echo "$value" | grep -qE '^[0-9]+$' || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+                error "Invalid port: $value (must be 1–65535)"
+                exit 1
+            fi
+            defaults write "$PLIST_DOMAIN" ReceiverPort -int "$value"
+            success "Receiver port set to ${BOLD}$value${RESET}"
+            ;;
+        latency)
+            if ! echo "$value" | grep -qE '^[0-9]+$'; then
+                error "Invalid latency: $value (must be a non-negative integer in ms)"
+                exit 1
+            fi
+            defaults write "$PLIST_DOMAIN" LatencyOffsetMs -int "$value"
+            success "Latency offset set to ${BOLD}${value} ms${RESET}"
+            ;;
+        *)
+            error "Unknown setting: $key"
+            echo -e "  ${DIM}Valid settings: ip, port, latency${RESET}"
+            exit 1
+            ;;
+    esac
+
+    echo -e "  ${DIM}Run ${AMBER}zinkos reload${DIM} to apply changes.${RESET}"
+}
+
+cmd_reload() {
+    info "Restarting coreaudiod..."
+    sudo killall coreaudiod
+    sleep 2
+
+    local pid
+    pid=$(pgrep -x coreaudiod 2>/dev/null || echo "")
+    if [ -n "$pid" ]; then
+        success "coreaudiod restarted (PID $pid)"
+    else
+        error "coreaudiod did not restart"
+        exit 1
+    fi
+}
+
+cmd_install() {
+    info "Installing zinkos to $SYMLINK_PATH..."
+    sudo ln -sf "$SCRIPT_PATH" "$SYMLINK_PATH"
+    success "Installed. Run ${BOLD}zinkos${RESET} from anywhere."
+}
+
+cmd_rebuild() {
+    local repo_dir
+    repo_dir="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+    info "Rebuilding and reloading driver..."
+    "$repo_dir/scripts/reload.sh" "${repo_dir}/build"
+}
+
+cmd_uninstall() {
+    if [ ! -L "$SYMLINK_PATH" ]; then
+        info "No symlink at $SYMLINK_PATH — nothing to remove."
+        return
+    fi
+    info "Removing $SYMLINK_PATH..."
+    sudo rm -f "$SYMLINK_PATH"
+    success "Uninstalled. Symlink removed."
+}
+
+cmd_help() {
+    print_logo
+    echo -e "  ${BOLD}${AMBER}Usage:${RESET}  zinkos <command>"
+    echo ""
+    echo -e "  ${BOLD}${AMBER}Commands:${RESET}"
+    echo -e "    ${BROWN}status${RESET}              Show current config and driver status"
+    echo -e "    ${BROWN}set ip${RESET} <IP>         Set receiver IP address"
+    echo -e "    ${BROWN}set port${RESET} <PORT>     Set receiver UDP port"
+    echo -e "    ${BROWN}set latency${RESET} <MS>    Set latency offset (ms)"
+    echo -e "    ${BROWN}rebuild${RESET}             Build, validate, install, and reload driver"
+    echo -e "    ${BROWN}reload${RESET}              Restart coreaudiod to apply changes"
+    echo -e "    ${BROWN}install${RESET}             Symlink to /usr/local/bin for global access"
+    echo -e "    ${BROWN}uninstall${RESET}           Remove the global symlink"
+    echo -e "    ${BROWN}help${RESET}                Show this help"
+    echo ""
+}
+
+# ── Main ────────────────────────────────────────────────────
+
+case "${1:-}" in
+    status)
+        cmd_status
+        ;;
+    set)
+        if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+            error "Usage: zinkos set <ip|port|latency> <value>"
+            exit 1
+        fi
+        cmd_set "$2" "$3"
+        ;;
+    rebuild)
+        cmd_rebuild
+        ;;
+    reload)
+        cmd_reload
+        ;;
+    install)
+        cmd_install
+        ;;
+    uninstall)
+        cmd_uninstall
+        ;;
+    help|--help|-h)
+        cmd_help
+        ;;
+    "")
+        cmd_help
+        ;;
+    *)
+        error "Unknown command: $1"
+        echo -e "  ${DIM}Run ${AMBER}zinkos help${DIM} for usage.${RESET}"
+        exit 1
+        ;;
+esac

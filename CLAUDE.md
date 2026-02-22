@@ -108,6 +108,10 @@ zinkos-driver/
   CMakeLists.txt             # Top-level build (driver bundle + Rust)
 ```
 
+## Latency
+
+When making changes that affect latency (buffer sizes, pacing, ALSA config, jitter buffer tuning, etc.), update `docs/latency-analysis.md` with the new values and expected impact.
+
 ## Key Design Rules
 
 1. **CoreAudio RT thread must never block.** Write to ring buffer only; no allocations, no locks, no syscalls.

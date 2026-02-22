@@ -6,6 +6,8 @@
 //
 
 #include "ZinkosPlugin.h"
+#include <cmath>
+#include <cstdio>
 #include <mach/mach_time.h>
 #include <os/log.h>
 
@@ -14,6 +16,90 @@ static os_log_t sLog = os_log_create("com.zinkos.driver", "plugin");
 
 // Global singleton state
 ZinkosDriverState gDriverState = {};
+
+// ============================================================
+// Config loading from /Library/Preferences/com.zinkos.driver.plist
+// ============================================================
+
+static const char* kConfigAppID = "com.zinkos.driver";
+static const char* kDefaultIP = "192.168.1.87";
+static const uint16_t kDefaultPort = 4010;
+static const uint32_t kDefaultLatencyOffsetMs = 0;
+static const char* kVolumeStatePath = "/Library/Preferences/Audio/com.zinkos.volume";
+
+static void PersistVolumeState()
+{
+    FILE* f = fopen(kVolumeStatePath, "w");
+    if (f) {
+        fprintf(f, "%.6f\n%d\n", gDriverState.volumeScalar, gDriverState.muted ? 1 : 0);
+        fclose(f);
+    }
+}
+
+static void LoadVolumeState()
+{
+    gDriverState.volumeScalar = 0.5f;  // safe default — never blast full volume
+    gDriverState.muted = false;
+    FILE* f = fopen(kVolumeStatePath, "r");
+    if (f) {
+        float v = 0.5f;
+        int m = 0;
+        if (fscanf(f, "%f\n%d", &v, &m) >= 1) {
+            if (v >= 0.0f && v <= 1.0f) gDriverState.volumeScalar = v;
+            gDriverState.muted = (m != 0);
+        }
+        fclose(f);
+    }
+}
+
+static void LoadConfig()
+{
+    CFStringRef appID = CFStringCreateWithCString(kCFAllocatorDefault, kConfigAppID, kCFStringEncodingUTF8);
+
+    // ReceiverIP
+    strlcpy(gDriverState.targetIP, kDefaultIP, sizeof(gDriverState.targetIP));
+    CFStringRef ipKey = CFSTR("ReceiverIP");
+    CFPropertyListRef ipVal = CFPreferencesCopyAppValue(ipKey, appID);
+    if (ipVal && CFGetTypeID(ipVal) == CFStringGetTypeID()) {
+        CFStringGetCString((CFStringRef)ipVal, gDriverState.targetIP, sizeof(gDriverState.targetIP), kCFStringEncodingUTF8);
+    }
+    if (ipVal) CFRelease(ipVal);
+
+    // ReceiverPort
+    gDriverState.targetPort = kDefaultPort;
+    CFStringRef portKey = CFSTR("ReceiverPort");
+    CFPropertyListRef portVal = CFPreferencesCopyAppValue(portKey, appID);
+    if (portVal && CFGetTypeID(portVal) == CFNumberGetTypeID()) {
+        int64_t portNum = 0;
+        CFNumberGetValue((CFNumberRef)portVal, kCFNumberSInt64Type, &portNum);
+        if (portNum > 0 && portNum <= 65535) {
+            gDriverState.targetPort = (uint16_t)portNum;
+        }
+    }
+    if (portVal) CFRelease(portVal);
+
+    // LatencyOffsetMs
+    gDriverState.latencyOffsetMs = kDefaultLatencyOffsetMs;
+    CFStringRef latencyKey = CFSTR("LatencyOffsetMs");
+    CFPropertyListRef latencyVal = CFPreferencesCopyAppValue(latencyKey, appID);
+    if (latencyVal && CFGetTypeID(latencyVal) == CFNumberGetTypeID()) {
+        int64_t latencyNum = 0;
+        CFNumberGetValue((CFNumberRef)latencyVal, kCFNumberSInt64Type, &latencyNum);
+        if (latencyNum >= 0) {
+            gDriverState.latencyOffsetMs = (uint32_t)latencyNum;
+        }
+    }
+    if (latencyVal) CFRelease(latencyVal);
+
+    // Volume/mute state (persisted via plain file — CFPreferences blocked in coreaudiod)
+    LoadVolumeState();
+
+    CFRelease(appID);
+
+    os_log(sLog, "LoadConfig: IP=%{public}s port=%u latencyOffset=%ums volume=%.2f muted=%d",
+           gDriverState.targetIP, gDriverState.targetPort, gDriverState.latencyOffsetMs,
+           gDriverState.volumeScalar, gDriverState.muted);
+}
 
 // Forward declarations for vtable functions
 static HRESULT ZinkosQueryInterface(void* inDriver, REFIID inUUID, LPVOID* outInterface);
@@ -140,6 +226,7 @@ static OSStatus ZinkosInitialize(AudioServerPlugInDriverRef /*inDriver*/, AudioS
     os_log(sLog, "ZinkosInitialize: ENTERED");
     gDriverState.host = inHost;
     gDriverState.engine = nullptr;
+    LoadConfig();
 
     // Compute ticks per frame for GetZeroTimeStamp
     mach_timebase_info_data_t timebase;
@@ -200,7 +287,7 @@ static OSStatus ZinkosStartIO(AudioServerPlugInDriverRef /*inDriver*/, AudioObje
 
     // Lazily create engine on first StartIO (deferred from Initialize)
     if (!gDriverState.engine) {
-        gDriverState.engine = zinkos_engine_create("192.168.1.87", 4010);
+        gDriverState.engine = zinkos_engine_create(gDriverState.targetIP, gDriverState.targetPort);
         if (!gDriverState.engine) {
             os_log_error(sLog, "ZinkosStartIO: failed to create engine");
             return kAudioHardwareUnspecifiedError;
@@ -239,19 +326,21 @@ static OSStatus ZinkosStopIO(AudioServerPlugInDriverRef /*inDriver*/, AudioObjec
 
 static OSStatus ZinkosGetZeroTimeStamp(AudioServerPlugInDriverRef /*inDriver*/, AudioObjectID /*inDeviceObjectID*/, UInt32 /*inClientID*/, Float64* outSampleTime, UInt64* outHostTime, UInt64* outSeed)
 {
-    // Synthesize timestamps based on anchor time.
-    // CoreAudio uses this to synchronize its IO calls.
+    if (!gDriverState.ioRunning) {
+        return kAudioHardwareNotRunningError;
+    }
+
+    // Synthesize timestamps based on anchor time set at StartIO.
     UInt64 currentHostTime = mach_absolute_time();
     UInt64 elapsed = currentHostTime - gDriverState.anchorHostTime;
     UInt64 elapsedFrames = elapsed / gDriverState.ticksPerFrame;
 
-    // Round down to the nearest IO cycle boundary (typically 512 frames)
-    // Using 256 frames as a reasonable IO cycle size
-    const UInt64 ioCycleFrames = 256;
-    UInt64 cycleCount = elapsedFrames / ioCycleFrames;
+    // Round down to the nearest zero-timestamp period boundary
+    const UInt64 ztsPeriod = 512;
+    UInt64 cycleCount = elapsedFrames / ztsPeriod;
 
-    *outSampleTime = (Float64)(cycleCount * ioCycleFrames);
-    *outHostTime = gDriverState.anchorHostTime + (cycleCount * ioCycleFrames * gDriverState.ticksPerFrame);
+    *outSampleTime = (Float64)(cycleCount * ztsPeriod);
+    *outHostTime = gDriverState.anchorHostTime + (cycleCount * ztsPeriod * gDriverState.ticksPerFrame);
     *outSeed = 1; // changes only on config changes
 
     return kAudioHardwareNoError;
@@ -280,15 +369,14 @@ static OSStatus ZinkosDoIOOperation(AudioServerPlugInDriverRef /*inDriver*/, Aud
         return kAudioHardwareNoError;
     }
 
-    // CoreAudio delivers Float32 interleaved samples despite our S16LE declaration.
-    // Convert Float32 → S16LE in place, then hand off to engine.
+    // Stream format is Float32 (CoreAudio native). Apply volume, convert to S16LE for engine.
     Float32* floatBuf = (Float32*)ioMainBuffer;
     int16_t* intBuf = (int16_t*)ioMainBuffer; // safe: int16 is smaller than float32
 
+    Float32 gain = gDriverState.muted ? 0.0f : gDriverState.volumeScalar;
     UInt32 sampleCount = inIOBufferFrameSize * 2; // stereo
     for (UInt32 i = 0; i < sampleCount; i++) {
-        Float32 sample = floatBuf[i];
-        // Clamp to [-1, 1]
+        Float32 sample = floatBuf[i] * gain;
         if (sample > 1.0f) sample = 1.0f;
         if (sample < -1.0f) sample = -1.0f;
         intBuf[i] = (int16_t)(sample * 32767.0f);
@@ -329,8 +417,37 @@ static OSStatus ZinkosGetPropertyData(AudioServerPlugInDriverRef inDriver, Audio
     return ZinkosDevice_GetPropertyData(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, inDataSize, outDataSize, outData);
 }
 
-static OSStatus ZinkosSetPropertyData(AudioServerPlugInDriverRef /*inDriver*/, AudioObjectID /*inObjectID*/, pid_t /*inClientProcessID*/, const AudioObjectPropertyAddress* /*inAddress*/, UInt32 /*inQualifierDataSize*/, const void* /*inQualifierData*/, UInt32 /*inDataSize*/, const void* /*inData*/)
+static OSStatus ZinkosSetPropertyData(AudioServerPlugInDriverRef /*inDriver*/, AudioObjectID inObjectID, pid_t /*inClientProcessID*/, const AudioObjectPropertyAddress* inAddress, UInt32 /*inQualifierDataSize*/, const void* /*inQualifierData*/, UInt32 inDataSize, const void* inData)
 {
-    // No settable properties for now
+    // Volume scalar
+    if (inObjectID == kObjectID_Volume && inAddress->mSelector == kAudioLevelControlPropertyScalarValue) {
+        if (inDataSize >= sizeof(Float32)) {
+            Float32 val = *(const Float32*)inData;
+            if (val < 0.0f) val = 0.0f;
+            if (val > 1.0f) val = 1.0f;
+            gDriverState.volumeScalar = val;
+            PersistVolumeState();
+        }
+        return kAudioHardwareNoError;
+    }
+    // Volume dB
+    if (inObjectID == kObjectID_Volume && inAddress->mSelector == kAudioLevelControlPropertyDecibelValue) {
+        if (inDataSize >= sizeof(Float32)) {
+            Float32 dB = *(const Float32*)inData;
+            if (dB <= -96.0f) gDriverState.volumeScalar = 0.0f;
+            else if (dB >= 0.0f) gDriverState.volumeScalar = 1.0f;
+            else gDriverState.volumeScalar = powf(10.0f, dB / 20.0f);
+            PersistVolumeState();
+        }
+        return kAudioHardwareNoError;
+    }
+    // Mute
+    if (inObjectID == kObjectID_Mute && inAddress->mSelector == kAudioBooleanControlPropertyValue) {
+        if (inDataSize >= sizeof(UInt32)) {
+            gDriverState.muted = (*(const UInt32*)inData) != 0;
+            PersistVolumeState();
+        }
+        return kAudioHardwareNoError;
+    }
     return kAudioHardwareUnsupportedOperationError;
 }

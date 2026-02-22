@@ -9,6 +9,8 @@
 // Note: kObjectID_PlugIn is assigned by the host (always 1)
 #define kObjectID_Device  2
 #define kObjectID_Stream  3
+#define kObjectID_Volume  4
+#define kObjectID_Mute    5
 
 // Plugin driver interface — the one function we export
 extern "C" void* ZinkosPlugIn_Create(CFAllocatorRef allocator, CFUUIDRef requestedTypeUUID);
@@ -29,6 +31,15 @@ struct ZinkosDriverState {
     UInt64 anchorHostTime;    // mach_absolute_time at StartIO
     UInt64 anchorSampleTime;  // sample counter at StartIO
     UInt64 ticksPerFrame;     // host ticks per audio frame (for GetZeroTimeStamp)
+
+    // Volume control
+    Float32 volumeScalar;     // 0.0 – 1.0
+    bool muted;
+
+    // Config (loaded from com.zinkos.driver plist)
+    char targetIP[256];       // receiver IP address
+    uint16_t targetPort;      // receiver UDP port
+    uint32_t latencyOffsetMs; // user-configurable latency offset
 };
 
 // Global driver state (singleton — CoreAudio loads one instance)

@@ -7,6 +7,7 @@
 
 #include "ZinkosPlugin.h"
 #include "ZinkosDevice.h"
+#include <cmath>
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <os/log.h>
 
@@ -129,7 +130,7 @@ static bool IsDeviceProperty(AudioObjectID inObjectID, AudioObjectPropertySelect
         case kAudioObjectPropertyOwnedObjects:
         case kAudioDevicePropertyStreams:
         case kAudioDevicePropertyRelatedDevices:
-        case 'ctrl':  // kAudioObjectPropertyControlList — empty, no controls
+        case 'ctrl':  // kAudioObjectPropertyControlList — volume + mute
         case kAudioDevicePropertyLatency:
         case kAudioDevicePropertySafetyOffset:
         case kAudioDevicePropertyNominalSampleRate:
@@ -139,6 +140,8 @@ static bool IsDeviceProperty(AudioObjectID inObjectID, AudioObjectPropertySelect
         case kAudioDevicePropertyIsHidden:
         case kAudioDevicePropertyPreferredChannelsForStereo:
         case kAudioDevicePropertyPreferredChannelLayout:
+        case 'fsiz':
+        case 'fsrn':
             return true;
         default:
             return false;
@@ -160,9 +163,9 @@ static OSStatus GetDevicePropertySize(AudioObjectPropertySelector sel, const Aud
         case kAudioDevicePropertyDeviceCanBeDefaultDevice: RETURN_SIZE(UInt32);
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice: RETURN_SIZE(UInt32);
         case kAudioObjectPropertyOwnedObjects:
-            // Owns 1 stream (output only)
+            // Owns 1 stream + 2 controls (output only)
             if (inAddress->mScope == kAudioObjectPropertyScopeOutput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) {
-                *outDataSize = sizeof(AudioObjectID);
+                *outDataSize = 3 * sizeof(AudioObjectID);
             } else {
                 *outDataSize = 0;
             }
@@ -175,8 +178,8 @@ static OSStatus GetDevicePropertySize(AudioObjectPropertySelector sel, const Aud
             }
             return kAudioHardwareNoError;
         case kAudioDevicePropertyRelatedDevices: RETURN_SIZE(AudioObjectID);
-        case 'ctrl':  // control list — empty
-            *outDataSize = 0;
+        case 'ctrl':
+            *outDataSize = 2 * sizeof(AudioObjectID); // volume + mute
             return kAudioHardwareNoError;
         case kAudioDevicePropertyLatency:       RETURN_SIZE(UInt32);
         case kAudioDevicePropertySafetyOffset:  RETURN_SIZE(UInt32);
@@ -193,6 +196,8 @@ static OSStatus GetDevicePropertySize(AudioObjectPropertySelector sel, const Aud
         case kAudioDevicePropertyPreferredChannelLayout:
             *outDataSize = offsetof(AudioChannelLayout, mChannelDescriptions) + kZinkos_ChannelCount * sizeof(AudioChannelDescription);
             return kAudioHardwareNoError;
+        case 'fsiz': RETURN_SIZE(UInt32);
+        case 'fsrn': RETURN_SIZE(AudioValueRange);
         default: return kAudioHardwareUnknownPropertyError;
     }
 }
@@ -220,24 +225,28 @@ static OSStatus GetDeviceProperty(AudioObjectPropertySelector sel, const AudioOb
         case kAudioDevicePropertyDeviceIsRunning:
             return WriteUInt32(outData, outDataSize, gDriverState.ioRunning ? 1 : 0);
         case kAudioDevicePropertyDeviceCanBeDefaultDevice:
-            // Only for output scope — we're an output-only device
-            if (inAddress->mScope == kAudioObjectPropertyScopeOutput) {
+            if (inAddress->mScope == kAudioObjectPropertyScopeOutput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) {
                 return WriteUInt32(outData, outDataSize, 1);
             }
             return WriteUInt32(outData, outDataSize, 0);
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice:
-            if (inAddress->mScope == kAudioObjectPropertyScopeOutput) {
+            if (inAddress->mScope == kAudioObjectPropertyScopeOutput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) {
                 return WriteUInt32(outData, outDataSize, 1);
             }
             return WriteUInt32(outData, outDataSize, 0);
         case kAudioObjectPropertyOwnedObjects:
             if (inAddress->mScope == kAudioObjectPropertyScopeOutput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) {
-                return WriteUInt32(outData, outDataSize, kObjectID_Stream);
+                AudioObjectID objects[3] = { kObjectID_Stream, kObjectID_Volume, kObjectID_Mute };
+                UInt32 count = 3;
+                UInt32 sz = count * sizeof(AudioObjectID);
+                if (inDataSize < sz) sz = inDataSize;
+                memcpy(outData, objects, sz);
+                *outDataSize = sz;
+                return kAudioHardwareNoError;
             }
             *outDataSize = 0;
             return kAudioHardwareNoError;
         case kAudioDevicePropertyStreams:
-            // Only output stream
             if (inAddress->mScope == kAudioObjectPropertyScopeOutput || inAddress->mScope == kAudioObjectPropertyScopeGlobal) {
                 return WriteUInt32(outData, outDataSize, kObjectID_Stream);
             }
@@ -245,9 +254,12 @@ static OSStatus GetDeviceProperty(AudioObjectPropertySelector sel, const AudioOb
             return kAudioHardwareNoError;
         case kAudioDevicePropertyRelatedDevices:
             return WriteUInt32(outData, outDataSize, kObjectID_Device);
-        case 'ctrl':  // control list — empty
-            *outDataSize = 0;
+        case 'ctrl': {
+            AudioObjectID controls[2] = { kObjectID_Volume, kObjectID_Mute };
+            memcpy(outData, controls, sizeof(controls));
+            *outDataSize = sizeof(controls);
             return kAudioHardwareNoError;
+        }
         case kAudioDevicePropertyLatency:
             return WriteUInt32(outData, outDataSize, kZinkos_DeviceLatency);
         case kAudioDevicePropertySafetyOffset:
@@ -263,14 +275,22 @@ static OSStatus GetDeviceProperty(AudioObjectPropertySelector sel, const AudioOb
         case kAudioDevicePropertyClockDomain:
             return WriteUInt32(outData, outDataSize, 0);
         case kAudioDevicePropertyZeroTimeStampPeriod:
-            // How many frames between zero timestamps. Using 256 as IO cycle size.
-            return WriteUInt32(outData, outDataSize, 256);
+            // Must match the period used in GetZeroTimeStamp and buffer frame size
+            return WriteUInt32(outData, outDataSize, 512);
         case kAudioDevicePropertyIsHidden:
             return WriteUInt32(outData, outDataSize, 0); // visible in Sound preferences
         case kAudioDevicePropertyPreferredChannelsForStereo: {
             UInt32 channels[2] = { 1, 2 };
             memcpy(outData, channels, sizeof(channels));
             *outDataSize = sizeof(channels);
+            return kAudioHardwareNoError;
+        }
+        case 'fsiz':
+            return WriteUInt32(outData, outDataSize, 512); // default IO buffer size
+        case 'fsrn': {
+            AudioValueRange range = { kZinkos_MinBufferFrames, kZinkos_MaxBufferFrames };
+            memcpy(outData, &range, sizeof(range));
+            *outDataSize = sizeof(range);
             return kAudioHardwareNoError;
         }
         case kAudioDevicePropertyPreferredChannelLayout: {
@@ -327,7 +347,7 @@ static AudioStreamBasicDescription MakeStreamFormat() {
     AudioStreamBasicDescription desc = {};
     desc.mSampleRate = kZinkos_SampleRate;
     desc.mFormatID = kAudioFormatLinearPCM;
-    desc.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+    desc.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
     desc.mBitsPerChannel = kZinkos_BitsPerChannel;
     desc.mChannelsPerFrame = kZinkos_ChannelCount;
     desc.mFramesPerPacket = 1;
@@ -408,6 +428,104 @@ static OSStatus GetStreamProperty(AudioObjectPropertySelector sel, UInt32 inData
 }
 
 // ============================================================
+// Volume/Mute control properties (objectID == kObjectID_Volume or kObjectID_Mute)
+// ============================================================
+
+static bool IsControlProperty(AudioObjectID inObjectID, AudioObjectPropertySelector sel) {
+    if (inObjectID != kObjectID_Volume && inObjectID != kObjectID_Mute) return false;
+    // Common to both control types
+    switch (sel) {
+        case kAudioObjectPropertyBaseClass:
+        case kAudioObjectPropertyClass:
+        case kAudioObjectPropertyOwner:
+        case kAudioObjectPropertyOwnedObjects:
+        case kAudioControlPropertyScope:
+        case kAudioControlPropertyElement:
+            return true;
+        default:
+            break;
+    }
+    // Volume-only properties
+    if (inObjectID == kObjectID_Volume) {
+        switch (sel) {
+            case kAudioLevelControlPropertyScalarValue:
+            case kAudioLevelControlPropertyDecibelValue:
+            case kAudioLevelControlPropertyDecibelRange:
+                return true;
+            default: break;
+        }
+    }
+    // Mute-only property
+    if (inObjectID == kObjectID_Mute) {
+        if (sel == kAudioBooleanControlPropertyValue) return true;
+    }
+    return false;
+}
+
+static OSStatus GetControlPropertySize(AudioObjectID inObjectID, AudioObjectPropertySelector sel, UInt32* outDataSize) {
+    switch (sel) {
+        case kAudioObjectPropertyBaseClass:     RETURN_SIZE(AudioClassID);
+        case kAudioObjectPropertyClass:         RETURN_SIZE(AudioClassID);
+        case kAudioObjectPropertyOwner:         RETURN_SIZE(AudioObjectID);
+        case kAudioObjectPropertyOwnedObjects:
+            *outDataSize = 0;
+            return kAudioHardwareNoError;
+        case kAudioControlPropertyScope:        RETURN_SIZE(AudioObjectPropertyScope);
+        case kAudioControlPropertyElement:      RETURN_SIZE(AudioObjectPropertyElement);
+        case kAudioLevelControlPropertyScalarValue: RETURN_SIZE(Float32);
+        case kAudioLevelControlPropertyDecibelValue: RETURN_SIZE(Float32);
+        case kAudioLevelControlPropertyDecibelRange: RETURN_SIZE(AudioValueRange);
+        case kAudioBooleanControlPropertyValue: RETURN_SIZE(UInt32);
+        default: return kAudioHardwareUnknownPropertyError;
+    }
+}
+
+static OSStatus GetControlProperty(AudioObjectID inObjectID, AudioObjectPropertySelector sel, UInt32* outDataSize, void* outData) {
+    switch (sel) {
+        case kAudioObjectPropertyBaseClass:
+            if (inObjectID == kObjectID_Volume)
+                return WriteUInt32(outData, outDataSize, kAudioLevelControlClassID);
+            return WriteUInt32(outData, outDataSize, kAudioBooleanControlClassID);
+        case kAudioObjectPropertyClass:
+            if (inObjectID == kObjectID_Volume)
+                return WriteUInt32(outData, outDataSize, kAudioVolumeControlClassID);
+            return WriteUInt32(outData, outDataSize, kAudioMuteControlClassID);
+        case kAudioObjectPropertyOwner:
+            return WriteUInt32(outData, outDataSize, kObjectID_Device);
+        case kAudioObjectPropertyOwnedObjects:
+            *outDataSize = 0;
+            return kAudioHardwareNoError;
+        case kAudioControlPropertyScope:
+            return WriteUInt32(outData, outDataSize, kAudioObjectPropertyScopeOutput);
+        case kAudioControlPropertyElement:
+            return WriteUInt32(outData, outDataSize, kAudioObjectPropertyElementMain);
+        case kAudioLevelControlPropertyScalarValue: {
+            *(Float32*)outData = gDriverState.volumeScalar;
+            *outDataSize = sizeof(Float32);
+            return kAudioHardwareNoError;
+        }
+        case kAudioLevelControlPropertyDecibelValue: {
+            // Convert scalar to dB: 0.0→-96dB, 1.0→0dB
+            Float32 scalar = gDriverState.volumeScalar;
+            Float32 dB = (scalar > 0.001f) ? (20.0f * log10f(scalar)) : -96.0f;
+            *(Float32*)outData = dB;
+            *outDataSize = sizeof(Float32);
+            return kAudioHardwareNoError;
+        }
+        case kAudioLevelControlPropertyDecibelRange: {
+            AudioValueRange range = { -96.0, 0.0 };
+            memcpy(outData, &range, sizeof(range));
+            *outDataSize = sizeof(range);
+            return kAudioHardwareNoError;
+        }
+        case kAudioBooleanControlPropertyValue:
+            return WriteUInt32(outData, outDataSize, gDriverState.muted ? 1 : 0);
+        default:
+            return kAudioHardwareUnknownPropertyError;
+    }
+}
+
+// ============================================================
 // Public dispatch functions
 // ============================================================
 
@@ -420,6 +538,7 @@ OSStatus ZinkosDevice_HasProperty(
     if (IsPluginProperty(inObjectID, inAddress->mSelector)) return kAudioHardwareNoError;
     if (IsDeviceProperty(inObjectID, inAddress->mSelector)) return kAudioHardwareNoError;
     if (IsStreamProperty(inObjectID, inAddress->mSelector)) return kAudioHardwareNoError;
+    if (IsControlProperty(inObjectID, inAddress->mSelector)) return kAudioHardwareNoError;
     // Log unknown property queries — helps diagnose what the host expects
     os_log(sDevLog, "HasProperty: UNKNOWN obj=%u sel='%{public}.4s' scope='%{public}.4s'",
            (unsigned)inObjectID,
@@ -430,13 +549,23 @@ OSStatus ZinkosDevice_HasProperty(
 
 OSStatus ZinkosDevice_IsPropertySettable(
     AudioServerPlugInDriverRef /*inDriver*/,
-    AudioObjectID /*inObjectID*/,
+    AudioObjectID inObjectID,
     pid_t /*inClientProcessID*/,
-    const AudioObjectPropertyAddress* /*inAddress*/,
+    const AudioObjectPropertyAddress* inAddress,
     Boolean* outIsSettable)
 {
-    // Nothing is settable for now
     *outIsSettable = false;
+    // Volume scalar and dB are settable
+    if ((inObjectID == kObjectID_Volume) &&
+        (inAddress->mSelector == kAudioLevelControlPropertyScalarValue ||
+         inAddress->mSelector == kAudioLevelControlPropertyDecibelValue)) {
+        *outIsSettable = true;
+    }
+    // Mute is settable
+    if ((inObjectID == kObjectID_Mute) &&
+        (inAddress->mSelector == kAudioBooleanControlPropertyValue)) {
+        *outIsSettable = true;
+    }
     return kAudioHardwareNoError;
 }
 
@@ -456,6 +585,8 @@ OSStatus ZinkosDevice_GetPropertyDataSize(
         result = GetDevicePropertySize(inAddress->mSelector, inAddress, outDataSize);
     else if (inObjectID == kObjectID_Stream)
         result = GetStreamPropertySize(inAddress->mSelector, outDataSize);
+    else if (inObjectID == kObjectID_Volume || inObjectID == kObjectID_Mute)
+        result = GetControlPropertySize(inObjectID, inAddress->mSelector, outDataSize);
     else
         result = kAudioHardwareUnknownPropertyError;
 
@@ -487,6 +618,8 @@ OSStatus ZinkosDevice_GetPropertyData(
         result = GetDeviceProperty(inAddress->mSelector, inAddress, inDataSize, outDataSize, outData);
     else if (inObjectID == kObjectID_Stream)
         result = GetStreamProperty(inAddress->mSelector, inDataSize, outDataSize, outData);
+    else if (inObjectID == kObjectID_Volume || inObjectID == kObjectID_Mute)
+        result = GetControlProperty(inObjectID, inAddress->mSelector, outDataSize, outData);
     else
         result = kAudioHardwareUnknownPropertyError;
 

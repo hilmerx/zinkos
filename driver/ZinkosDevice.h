@@ -8,10 +8,10 @@
 #define kZinkos_Manufacturer    "Zinkos Audio"
 #define kZinkos_StreamName      "Zinkos Output"
 
-// Audio format
+// Audio format — stream format is Float32 (CoreAudio native), converted to S16LE in DoIOOperation
 #define kZinkos_SampleRate      48000.0
 #define kZinkos_ChannelCount    2
-#define kZinkos_BitsPerChannel  16
+#define kZinkos_BitsPerChannel  32
 
 // Latency (in frames)
 #define kZinkos_DeviceLatency   480     // ~10ms at 48kHz

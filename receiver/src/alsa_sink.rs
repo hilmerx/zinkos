@@ -31,10 +31,25 @@ mod platform {
                     .map_err(|e| format!("ALSA set_access: {e}"))?;
                 hwp.set_period_size(FRAMES_PER_PACKET as i64, ValueOr::Nearest)
                     .map_err(|e| format!("ALSA set_period_size: {e}"))?;
-                hwp.set_buffer_size((FRAMES_PER_PACKET as i64) * 4)
+                hwp.set_buffer_size((FRAMES_PER_PACKET as i64) * 3)
                     .map_err(|e| format!("ALSA set_buffer_size: {e}"))?;
                 pcm.hw_params(&hwp)
                     .map_err(|e| format!("ALSA hw_params: {e}"))?;
+            }
+
+            // sw_params: control when ALSA starts playback
+            {
+                let swp = pcm.sw_params_current()
+                    .map_err(|e| format!("ALSA sw_params_current: {e}"))?;
+                // Start hardware after 2 periods are written (~10ms) — not 1 frame (underrun)
+                // and not buffer_size (adds full buffer latency)
+                swp.set_start_threshold(FRAMES_PER_PACKET as i64 * 2)
+                    .map_err(|e| format!("ALSA set_start_threshold: {e}"))?;
+                // Wake us from writei block when 1 period of space is available
+                swp.set_avail_min(FRAMES_PER_PACKET as i64)
+                    .map_err(|e| format!("ALSA set_avail_min: {e}"))?;
+                pcm.sw_params(&swp)
+                    .map_err(|e| format!("ALSA sw_params: {e}"))?;
             }
 
             Ok(Self { pcm })
