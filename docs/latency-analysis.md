@@ -25,7 +25,7 @@ CoreAudio IO buffer → DoIOOperation (Float32→S16LE) → Ring buffer
 | UDP send (syscall) | <0.1ms | Yes | Single `send_to`, well under MTU |
 
 **Sender total (default): ~5–8ms** (IO buffer + pacer phase)
-**Sender total (tuned): ~4–5ms** (128-frame IO buffer + 100-frame period)
+**Sender total (tuned): ~4–5ms** (128-frame IO buffer + 100 frame size)
 
 ### Network
 
@@ -41,8 +41,8 @@ CoreAudio IO buffer → DoIOOperation (Float32→S16LE) → Ring buffer
 | Stage | Latency | Fixed? | Notes |
 |-------|---------|--------|-------|
 | UDP recv → jitter buffer push | <0.1ms | Yes | Separate recv_thread with RT priority |
-| **Jitter buffer start-fill** | **configurable** | **Tunable** | Set via `install.sh` (argv[2]). Must absorb Wi-Fi jitter. See tuning section. |
-| **ALSA buffer** | **configurable** | **Tunable** | `period_size × 3` periods. Set via `install.sh` (argv[3]). See tuning section. |
+| **Jitter buffer start-fill** | **configurable** | **Tunable** | Set via `install-rx.sh` (argv[2]). Must absorb Wi-Fi jitter. See tuning section. |
+| **ALSA buffer** | **configurable** | **Tunable** | `period_size × 3` periods. Set via `install-rx.sh` (argv[3]). See tuning section. |
 | ALSA start_threshold | configurable | Tunable | Controls when hardware begins DMA. `= period_size` is lowest safe value. |
 | DAC | ~1ms | Yes (hardware) | USB DAC adds ~1ms, I2S negligible |
 
@@ -50,7 +50,7 @@ CoreAudio IO buffer → DoIOOperation (Float32→S16LE) → Ring buffer
 
 ## End-to-End Latency Formula
 
-### Default settings (240-frame period, 15ms start-fill)
+### Default settings (240 frame size, 15ms start-fill)
 
 ```
 total = IO_buffer + pacer_phase + network + jitter_fill + DAC
@@ -58,7 +58,7 @@ total = IO_buffer + pacer_phase + network + jitter_fill + DAC
       ≈ ~23ms
 ```
 
-### Tuned settings (100-frame period, 3ms start-fill)
+### Tuned settings (100 frame size, 3ms start-fill)
 
 ```
 total = IO_buffer + pacer_phase + network + jitter_fill + DAC
@@ -70,7 +70,7 @@ total = IO_buffer + pacer_phase + network + jitter_fill + DAC
 
 ### Jitter Buffer Start-Fill
 
-How much audio to accumulate before starting playback. Must absorb Wi-Fi jitter. Set during `install.sh` or passed as argv[2] to the receiver binary.
+How much audio to accumulate before starting playback. Must absorb Wi-Fi jitter. Set during `install-rx.sh` or passed as argv[2] to the receiver binary.
 
 | Value | Behavior |
 |-------|----------|
@@ -81,12 +81,12 @@ How much audio to accumulate before starting playback. Must absorb Wi-Fi jitter.
 
 ### ALSA Period Size
 
-The ALSA period controls how many frames are written to hardware at a time. Set during `install.sh` or passed as argv[3] to the receiver binary. Should generally match the sender's `FramesPerPacket` for best results.
+The ALSA period controls how many frames are written to hardware at a time. Set during `install-rx.sh` or passed as argv[3] to the receiver binary. Should generally match the sender's frame size for best results.
 
 | Period | Duration at 48kHz | Buffer (×3) | Behavior |
 |--------|-------------------|-------------|----------|
-| 100 | ~2ms | 300 frames = 6.25ms | **Tuned.** Matches 100-frame sender period. |
-| 240 | 5ms | 720 frames = 15ms | **Default.** Matches default sender period. |
+| 100 | ~2ms | 300 frames = 6.25ms | **Tuned.** Matches 100 sender frame size. |
+| 240 | 5ms | 720 frames = 15ms | **Default.** Matches default sender frame size. |
 | 480 | 10ms | 1440 frames = 30ms | Conservative. More scheduling headroom. |
 
 ### ALSA `start_threshold`
@@ -163,7 +163,7 @@ Receiver:
 |-----|---------|-------|---------|
 | `ReceiverIP` | (none) | IPv4 or hostname | Swift app or `zinkos set ip` |
 | `ReceiverPort` | 4010 | 1–65535 | Swift app or `zinkos set port` |
-| `FramesPerPacket` | 240 | 48–4800 | Swift app Period field |
+| `FramesPerPacket` | 240 | 48–4800 | Swift app Frame size field |
 | `LatencyOffsetMs` | 0 | 0+ | `defaults write` or Swift app |
 
 ### Reported Latency to CoreAudio

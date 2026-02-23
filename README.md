@@ -36,9 +36,9 @@ Zinkos appears as a native sound output in macOS — just select it like you wou
 ```
      MacBook              Wi-Fi           Linux (receiver)
 ┌────────────────┐     ┌──────────┐      ┌──────────────────┐
-│ System audio   │     │  5ms UDP │      │ UDP recv thread  │
-│      │         │     │  packets │      │      │           │
-│      ▼         │     │  976B    │      │      ▼           │
+│ System audio   │     │   UDP    │      │ UDP recv thread  │
+│      │         │     │ packets  │      │      │           │
+│      ▼         │     │          │      │      ▼           │
 │ CoreAudio ─────│─────│──────────│─────▶│ Ring buffer      │
 │      │         │     │          │      │      │           │
 │      ▼         │     └──────────┘      │      ▼           │
@@ -59,7 +59,7 @@ Zinkos appears as a native sound output in macOS — just select it like you wou
 | Snapcast | ~30–50ms | Lossless | Standard Wi-Fi | No native macOS output — requires piping audio manually |
 | Dante (pro AV) | ~2ms | Lossless | Dedicated hardware both ends | Expensive licensing, proprietary hardware, not consumer-grade |
 
-Zinkos sits between consumer wireless and pro AV gear — no special hardware or licensing needed. Default settings give ~25ms with comfortable margins; tuning the packet period and receiver buffer down gets you to ~8ms on a good network.
+Zinkos sits between consumer wireless and pro AV gear — no special hardware or licensing needed. Default settings give ~25ms with comfortable margins; tuning the frame size and receiver buffer down gets you to ~8ms on a good network.
 
 ## Installation
 
@@ -115,7 +115,7 @@ git clone https://github.com/hilmerx/zinkos.git
 cd zinkos/receiver/c
 
 # Interactive installer — builds, lists audio devices, installs service
-./install.sh
+./install-rx.sh
 ```
 
 The installer lists your ALSA devices and lets you pick one, then asks for latency tuning:
@@ -134,6 +134,10 @@ Latency tuning (press Enter for defaults):
 ```
 
 ## Setup App
+
+<p align="center">
+  <img src="mac-app.png" alt="Zinkos Setup App" width="320">
+</p>
 
 The macOS setup app discovers receivers on your network via Bonjour/mDNS — no manual IP entry needed. Select a receiver, configure port and latency, and hit Save & Reload. The app stores mDNS hostnames (e.g. `mypi.local`) so it survives DHCP IP changes automatically.
 
@@ -177,14 +181,14 @@ Two settings control end-to-end latency:
 
 | Setting | Where | Default | Low-latency |
 |---|---|---|---|
-| **Period** (frames per packet) | Setup app or plist | 240 (~5ms) | 100 (~2ms) |
-| **Start-fill** (receiver buffer) | `install.sh` on receiver | 15ms | 3ms |
+| **Frame size** (frames per packet) | Setup app or plist | 240 (~5ms) | 100 (~2ms) |
+| **Start-fill** (receiver buffer) | `install-rx.sh` on receiver | 15ms | 3ms |
 
-**Default settings (~25ms):** 240-frame period, 15ms start-fill. Rock-solid on any network.
+**Default settings (~25ms):** 240 frame size, 15ms start-fill. Rock-solid on any network.
 
-**Tuned settings (~8ms):** 100-frame period, 3ms start-fill. Requires good Wi-Fi with low jitter.
+**Tuned settings (~8ms):** 100 frame size, 3ms start-fill. Requires good Wi-Fi with low jitter.
 
-The period is set in the macOS setup app (Period field) and takes effect on Save & Reload — no driver rebuild needed. The receiver's start-fill and ALSA period are set during `install.sh` and should match the sender's period for best results.
+The frame size is set in the macOS setup app and takes effect on Save & Reload — no driver rebuild needed. The receiver's start-fill and ALSA period are set during `install-rx.sh` and should match the sender's frame size for best results.
 
 | Stage | Default | Tuned |
 |---|---|---|
@@ -200,7 +204,7 @@ Fixed across the entire pipeline — no negotiation, no codecs:
 
 - **48,000 Hz** stereo
 - **S16_LE** (16-bit signed little-endian PCM)
-- **20-byte header** + PCM payload per UDP packet (size depends on period setting)
+- **20-byte header** + PCM payload per UDP packet (size depends on frame size setting)
 - **UDP port 4010** default (configurable via `zinkos set port <N>`)
 
 ## Roadmap
@@ -210,7 +214,7 @@ Fixed across the entire pipeline — no negotiation, no codecs:
 - Clock drift compensation (sample insertion/dropping)
 - ~~Bonjour/mDNS auto-discovery (no manual IP config)~~ Done
 - ~~macOS Swift setup app~~ Done
-- ~~Configurable packet period and receiver buffering~~ Done (~9ms achievable)
+- ~~Configurable frame size and receiver buffering~~ Done (~9ms achievable)
 - Multi-room / multi-receiver support
 - Forward error correction (FEC) for lossy networks
 - Pre-built signed installer (no Xcode or developer certificate needed)

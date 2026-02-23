@@ -96,6 +96,7 @@ Chosen for simplicity. One format everywhere — no codec negotiation, no resamp
 | **cdylib** | A Rust compilation target that produces a C-compatible dynamic library (.dylib on macOS). Looks like a normal C library to the linker — the caller doesn't need to know it's written in Rust. |
 | **DSCP / QoS** | Differentiated Services Code Point — a flag in the IP packet header that tells network equipment to prioritize this traffic. Zinkos marks packets as "Expedited Forwarding" (EF), the highest priority class. Helps on managed networks; most home routers ignore it. |
 | **PPM** | Parts Per Million. Used to measure clock drift. A 50 PPM drift between two 48kHz clocks means one produces 48000 samples/second while the other produces 48002.4 — a difference of 2.4 frames/second. |
+| **Frame size** | The number of audio frames per UDP packet. Called "period" in ALSA terminology. Configurable in the setup app — smaller values reduce latency but increase packet rate. Default 240 (5ms), tuned 100 (~2ms). |
 | **mDNS / Bonjour** | Multicast DNS — a protocol for discovering services on a local network without a central server. Apple's implementation is called Bonjour. Devices announce "I'm here, I offer this service" and others can find them automatically. Zinkos receivers advertise via `_zinkos._udp` and the macOS setup app discovers them automatically. |
 
 ## Why Rust + C++?
@@ -139,7 +140,7 @@ A macOS CoreAudio AudioServerPlugIn — the only way to appear as a system audio
 - Receives mixed system audio from CoreAudio as Float32 samples
 - Applies volume (quadratic perceptual curve) and converts to S16LE
 - Hands samples to the Rust engine via FFI
-- Reads config (receiver IP, port, frames per packet) from macOS preferences plist
+- Reads config (receiver IP, port, frame size) from macOS preferences plist
 - Persists volume/mute state to survive coreaudiod restarts
 
 **What it explicitly does NOT do:**
@@ -177,7 +178,7 @@ All actual logic. Compiled as a `cdylib` (C-compatible shared library) and calle
 ```
 
 - **Ring Buffer** — Lock-free single-producer/single-consumer (`rtrb` crate). The CoreAudio RT thread writes, the network thread reads. Zero contention.
-- **Packetizer** — Reads N frames (configurable via `FramesPerPacket`, default 240 = 5ms), prepends a 20-byte header (magic, protocol version, flags, sequence number, frame count, timestamp), outputs a UDP packet.
+- **Packetizer** — Reads N frames (configurable via frame size setting, default 240 = 5ms), prepends a 20-byte header (magic, protocol version, flags, sequence number, frame count, timestamp), outputs a UDP packet.
 - **UDP Sender** — Sends packets with DSCP Expedited Forwarding marking for QoS on managed networks. 64KB send buffer.
 - **State Machine** — Atomic state transitions (Stopped/Starting/Running/Stopping). The RT thread checks `is_accepting_audio()` with a single atomic load.
 - **Drift Estimator** — Monitors ring buffer fill level over a sliding window. Computes clock drift in PPM via linear regression. Currently logging-only; could feed a future resampler.
@@ -217,7 +218,7 @@ A standalone C program running on the Linux receiver. Two threads:
 3. Loop: read from ring buffer → `snd_pcm_writei()` → ALSA → DAC
 4. On underrun: zero-fill + ALSA recovery
 
-**ALSA configuration (configurable via install.sh):**
+**ALSA configuration (configurable via install-rx.sh):**
 ```
 Period size:      configurable (default 240 frames = 5ms, tuned: 100 frames = ~2ms)
 Periods:          3
@@ -226,7 +227,7 @@ Start threshold:  period × 2
 Format:           S16_LE, 48kHz, stereo
 ```
 
-The receiver reads `frames_per_packet` from the packet header, not from a compile-time constant. This means it adapts automatically when the sender changes its period setting — no receiver restart needed for that change. The ALSA period and start-fill are set during `install.sh` and should match the sender's period for optimal results.
+The receiver reads `frames_per_packet` from the packet header, not from a compile-time constant. This means it adapts automatically when the sender changes its frame size setting — no receiver restart needed for that change. The ALSA period and start-fill are set during `install-rx.sh` and should match the sender's frame size for optimal results.
 
 Runs as a systemd service (`zinkos-rx.service`) — starts on boot, auto-restarts on failure. Advertises itself via Avahi/mDNS (`_zinkos._udp`) for automatic discovery by the macOS setup app.
 
@@ -264,7 +265,7 @@ A native SwiftUI app that discovers receivers on the network via Bonjour/mDNS. N
 
 - Discovers `_zinkos._udp` services automatically
 - Shows receiver name, hostname, protocol version compatibility
-- Configures: receiver IP/hostname, port, latency offset, frames per packet (period)
+- Configures: receiver IP/hostname, port, latency offset, frame size
 - Saves to `com.zinkos.driver` plist and restarts coreaudiod
 - Stores mDNS hostnames (e.g. `mypi.local`) so config survives DHCP IP changes
 

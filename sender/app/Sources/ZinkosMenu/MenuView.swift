@@ -11,6 +11,10 @@ struct MenuView: View {
     @State private var statusMessage: String?
     @State private var errorMessage: String?
     @State private var saving = false
+    @State private var showFrameSizeInfo = false
+    @FocusState private var focusedField: Field?
+
+    private enum Field { case ip, port, latency, period }
 
     private var currentIP: String? { PlistConfig.currentIP }
     private var currentPort: UInt16 { PlistConfig.currentPort }
@@ -140,11 +144,12 @@ struct MenuView: View {
                     Text("IP")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 50, alignment: .leading)
+                        .frame(width: 70, alignment: .leading)
                     TextField("192.168.1.x", text: $manualIP)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(isValidIP ? .primary : .red)
+                        .focused($focusedField, equals: .ip)
                         .onChange(of: manualIP) { _ in dirty = true; statusMessage = nil }
                 }
 
@@ -152,11 +157,12 @@ struct MenuView: View {
                     Text("Port")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 50, alignment: .leading)
+                        .frame(width: 70, alignment: .leading)
                     TextField("4010", text: $portText)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(isValidPort ? .primary : .red)
+                        .focused($focusedField, equals: .port)
                         .onChange(of: portText) { _ in dirty = true; statusMessage = nil }
                 }
 
@@ -164,11 +170,12 @@ struct MenuView: View {
                     Text("Latency")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 50, alignment: .leading)
+                        .frame(width: 70, alignment: .leading)
                     TextField("0", text: $latencyText)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(isValidLatency ? .primary : .red)
+                        .focused($focusedField, equals: .latency)
                         .onChange(of: latencyText) { _ in dirty = true; statusMessage = nil }
                     Text("ms")
                         .font(.caption)
@@ -176,18 +183,32 @@ struct MenuView: View {
                 }
 
                 HStack {
-                    Text("Period")
+                    Text("Frame size")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 50, alignment: .leading)
+                        .frame(width: 70, alignment: .leading)
                     TextField("240", text: $periodText)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(isValidPeriod ? .primary : .red)
+                        .focused($focusedField, equals: .period)
                         .onChange(of: periodText) { _ in dirty = true; statusMessage = nil }
                     Text("frames")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14))
+                        .onTapGesture { showFrameSizeInfo.toggle() }
+                        .popover(isPresented: $showFrameSizeInfo, arrowEdge: .trailing) {
+                            Text("Frame size should also be configured on the receiver. Re-run install-rx.sh to match.")
+                                .font(.callout)
+                                .foregroundColor(.black)
+                                .padding(12)
+                                .frame(width: 220)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .background(Color.white)
+                        }
                 }
 
                 Button {
@@ -219,7 +240,10 @@ struct MenuView: View {
         .frame(width: 300)
         .background(.white)
         .environment(\.colorScheme, .light)
-        .onAppear { loadCurrentValues() }
+        .onAppear {
+            loadCurrentValues()
+            DispatchQueue.main.async { focusedField = nil }
+        }
         .onChange(of: browser.receivers) { _ in matchSavedReceiver() }
     }
 
@@ -245,6 +269,7 @@ struct MenuView: View {
     }
 
     private func selectReceiver(_ receiver: ReceiverInfo) {
+        focusedField = nil
         selectedId = receiver.id
         // Use the mDNS hostname — the engine resolves it at connect time,
         // so DHCP IP changes are handled automatically.
