@@ -21,7 +21,9 @@
 #define PORT            4010
 #define MAX_UDP_PAYLOAD 2048
 #define RING_FRAMES     (48000)
-#define HEADER_BYTES    16
+#define HEADER_BYTES    20
+#define PROTO_MAGIC     0x5A4B  /* "ZK" little-endian */
+#define PROTO_VERSION   1
 
 /* 60ms start fill = 2880 frames.
    After ALSA pre-fill (~1680), leaves ~1200 frames cushion in ring buffer. */
@@ -92,6 +94,22 @@ static void *recv_thread(void *arg) {
     ssize_t n = recv(fd, pkt, sizeof(pkt), 0);
     if (n <= 0) continue;
     if (n <= HEADER_BYTES) continue;
+
+    /* Validate magic and version */
+    uint16_t magic = (uint16_t)pkt[0] | ((uint16_t)pkt[1] << 8);
+    if (magic != PROTO_MAGIC) {
+      static uint64_t bad_magic = 0;
+      if (++bad_magic == 1 || bad_magic % 1000 == 0)
+        fprintf(stderr, "dropping packets with bad magic (old sender?) — count: %lu\n", (unsigned long)bad_magic);
+      continue;
+    }
+    if (pkt[2] > PROTO_VERSION) {
+      static uint64_t bad_ver = 0;
+      if (++bad_ver == 1 || bad_ver % 1000 == 0)
+        fprintf(stderr, "sender protocol v%u > receiver v%u — update the receiver\n", pkt[2], PROTO_VERSION);
+      continue;
+    }
+
     uint8_t *pcm_data = pkt + HEADER_BYTES;
     ssize_t pcm_len = n - HEADER_BYTES;
     if ((pcm_len % FRAME_BYTES) != 0) continue;

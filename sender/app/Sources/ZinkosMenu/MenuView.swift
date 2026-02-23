@@ -282,14 +282,27 @@ struct ReceiverRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(receiver.displayName)
                         .font(.callout.weight(.medium))
-                    Text(receiver.host)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if receiver.protoMismatch {
+                        Text("Protocol mismatch — update receiver")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    } else if receiver.protoVersion != nil {
+                        Text("\(receiver.host) · proto v\(receiver.protoVersion!)")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    } else {
+                        Text(receiver.host)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Spacer()
 
-                if isResolving {
+                if receiver.protoMismatch {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                } else if isResolving {
                     ProgressView().controlSize(.small)
                 } else if isSelected {
                     Image(systemName: "checkmark.circle.fill")

@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use zinkos_engine::config::{FRAMES_PER_PACKET, SAMPLE_RATE};
+use zinkos_engine::config::{FRAMES_PER_PACKET, HEADER_BYTES, PROTO_VERSION, SAMPLE_RATE};
 use zinkos_engine::packetizer::PacketHeader;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +33,8 @@ pub struct JitterBuffer {
     pub packets_dropped: u64,
     pub silence_frames_inserted: u64,
     pub underruns: u64,
+    bad_magic_count: u64,
+    version_mismatch_count: u64,
 }
 
 impl JitterBuffer {
@@ -50,6 +52,8 @@ impl JitterBuffer {
             packets_dropped: 0,
             silence_frames_inserted: 0,
             underruns: 0,
+            bad_magic_count: 0,
+            version_mismatch_count: 0,
         }
     }
 
@@ -65,12 +69,30 @@ impl JitterBuffer {
     /// Push a received UDP packet into the buffer.
     /// `raw` is the complete packet (header + PCM payload).
     pub fn push(&mut self, raw: &[u8]) {
-        if raw.len() < 16 {
+        if raw.len() < HEADER_BYTES as usize {
             return;
         }
 
-        let hdr = PacketHeader::from_bytes(raw[..16].try_into().unwrap());
-        let payload = &raw[16..];
+        let hdr = match PacketHeader::from_bytes(raw[..20].try_into().unwrap()) {
+            Some(h) => h,
+            None => {
+                self.bad_magic_count += 1;
+                if self.bad_magic_count == 1 || self.bad_magic_count % 1000 == 0 {
+                    eprintln!("zinkos: dropping packets with bad magic (old sender?) — count: {}", self.bad_magic_count);
+                }
+                return;
+            }
+        };
+
+        if hdr.version > PROTO_VERSION {
+            self.version_mismatch_count += 1;
+            if self.version_mismatch_count == 1 || self.version_mismatch_count % 1000 == 0 {
+                eprintln!("zinkos: sender protocol v{} > receiver v{} — update the receiver", hdr.version, PROTO_VERSION);
+            }
+            return;
+        }
+
+        let payload = &raw[HEADER_BYTES as usize..];
         let expected_bytes = hdr.frames as usize * 4;
 
         if payload.len() < expected_bytes {

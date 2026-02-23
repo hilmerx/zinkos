@@ -14,6 +14,17 @@
 static os_log_t sDevLog = os_log_create("com.zinkos.driver", "device");
 
 // ============================================================
+// Static CFStrings — compile-time constants, thread-safe, never freed
+// ============================================================
+
+static CFStringRef sDeviceName   = CFSTR("Zinkos");
+static CFStringRef sManufacturer = CFSTR("Zinkos Audio");
+static CFStringRef sDeviceUID    = CFSTR("ZinkosDevice_UID");
+static CFStringRef sModelUID     = CFSTR("ZinkosModel_UID");
+static CFStringRef sStreamName   = CFSTR("Zinkos Output");
+static CFStringRef sEmptyString  = CFSTR("");
+
+// ============================================================
 // Helper macros
 // ============================================================
 
@@ -31,9 +42,10 @@ static inline OSStatus WriteFloat64(void* outData, UInt32* outDataSize, Float64 
     return kAudioHardwareNoError;
 }
 
-static inline OSStatus WriteCFString(void* outData, UInt32* outDataSize, const char* str) {
-    CFStringRef cfStr = CFStringCreateWithCString(NULL, str, kCFStringEncodingUTF8);
-    *(CFStringRef*)outData = cfStr;
+// Return a static CFString to CoreAudio. CFSTR() strings are immortal,
+// so CFRetain/CFRelease are no-ops — safe from any thread.
+static inline OSStatus WriteCFString(void* outData, UInt32* outDataSize, CFStringRef str) {
+    *(CFStringRef*)outData = str;
     *outDataSize = sizeof(CFStringRef);
     return kAudioHardwareNoError;
 }
@@ -82,7 +94,7 @@ static OSStatus GetPluginProperty(AudioObjectPropertySelector sel, UInt32 inData
         case kAudioObjectPropertyOwner:
             return WriteUInt32(outData, outDataSize, kAudioObjectUnknown);
         case kAudioObjectPropertyManufacturer:
-            return WriteCFString(outData, outDataSize, kZinkos_Manufacturer);
+            return WriteCFString(outData, outDataSize, sManufacturer);
         case kAudioObjectPropertyOwnedObjects:
             return WriteUInt32(outData, outDataSize, kObjectID_Device);
         case kAudioPlugInPropertyDeviceList:
@@ -91,18 +103,16 @@ static OSStatus GetPluginProperty(AudioObjectPropertySelector sel, UInt32 inData
             // Qualifier is a CFStringRef UID
             if (inQualifierDataSize == sizeof(CFStringRef)) {
                 CFStringRef uid = *(CFStringRef*)inQualifierData;
-                CFStringRef ourUID = CFStringCreateWithCString(NULL, kZinkos_DeviceUID, kCFStringEncodingUTF8);
                 AudioObjectID result = kAudioObjectUnknown;
-                if (CFEqual(uid, ourUID)) {
+                if (CFEqual(uid, sDeviceUID)) {
                     result = kObjectID_Device;
                 }
-                CFRelease(ourUID);
                 return WriteUInt32(outData, outDataSize, result);
             }
             return WriteUInt32(outData, outDataSize, kAudioObjectUnknown);
         }
         case kAudioPlugInPropertyResourceBundle:
-            return WriteCFString(outData, outDataSize, "");
+            return WriteCFString(outData, outDataSize, sEmptyString);
         default:
             return kAudioHardwareUnknownPropertyError;
     }
@@ -211,13 +221,13 @@ static OSStatus GetDeviceProperty(AudioObjectPropertySelector sel, const AudioOb
         case kAudioObjectPropertyOwner:
             return WriteUInt32(outData, outDataSize, kAudioObjectPlugInObject);
         case kAudioObjectPropertyName:
-            return WriteCFString(outData, outDataSize, kZinkos_DeviceName);
+            return WriteCFString(outData, outDataSize, sDeviceName);
         case kAudioObjectPropertyManufacturer:
-            return WriteCFString(outData, outDataSize, kZinkos_Manufacturer);
+            return WriteCFString(outData, outDataSize, sManufacturer);
         case kAudioDevicePropertyDeviceUID:
-            return WriteCFString(outData, outDataSize, kZinkos_DeviceUID);
+            return WriteCFString(outData, outDataSize, sDeviceUID);
         case kAudioDevicePropertyModelUID:
-            return WriteCFString(outData, outDataSize, kZinkos_ModelUID);
+            return WriteCFString(outData, outDataSize, sModelUID);
         case kAudioDevicePropertyTransportType:
             return WriteUInt32(outData, outDataSize, kAudioDeviceTransportTypeVirtual);
         case kAudioDevicePropertyDeviceIsAlive:
@@ -394,7 +404,7 @@ static OSStatus GetStreamProperty(AudioObjectPropertySelector sel, UInt32 inData
             *outDataSize = 0; // streams own nothing
             return kAudioHardwareNoError;
         case kAudioObjectPropertyName:
-            return WriteCFString(outData, outDataSize, kZinkos_StreamName);
+            return WriteCFString(outData, outDataSize, sStreamName);
         case kAudioStreamPropertyIsActive:
             return WriteUInt32(outData, outDataSize, 1);
         case kAudioStreamPropertyDirection:
@@ -611,6 +621,12 @@ OSStatus ZinkosDevice_GetPropertyData(
     UInt32* outDataSize,
     void* outData)
 {
+    // Zero the output buffer so unhandled properties return NULL/0 instead of garbage.
+    // CoreAudio may read the buffer even when we return an error.
+    if (outData && inDataSize > 0) {
+        memset(outData, 0, inDataSize);
+    }
+
     OSStatus result;
     if (inObjectID == kAudioObjectPlugInObject)
         result = GetPluginProperty(inAddress->mSelector, inDataSize, outDataSize, outData, inQualifierDataSize, inQualifierData);

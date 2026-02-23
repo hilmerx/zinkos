@@ -9,7 +9,11 @@ pub const PACKET_DURATION_MS: u32 = 5;
 /// 5ms × 48000 / 1000 = 240 (exact integer)
 pub const FRAMES_PER_PACKET: u32 = 240;
 pub const PAYLOAD_BYTES: u32 = FRAMES_PER_PACKET * BYTES_PER_FRAME; // 960
-pub const HEADER_BYTES: u32 = 16;
+pub const HEADER_BYTES: u32 = 20;
+
+/// Protocol constants
+pub const PROTO_MAGIC: u16 = 0x5A4B; // "ZK"
+pub const PROTO_VERSION: u8 = 1;
 pub const PACKET_BYTES: u32 = HEADER_BYTES + PAYLOAD_BYTES; // 976
 
 /// Ring buffer sizing — enough for ~100ms of audio
@@ -46,7 +50,7 @@ mod tests {
     fn audio_format_constants() {
         assert_eq!(BYTES_PER_FRAME, 4);
         assert_eq!(PAYLOAD_BYTES, 960);
-        assert_eq!(PACKET_BYTES, 976);
+        assert_eq!(PACKET_BYTES, 980);
         assert_eq!(FRAMES_PER_PACKET, 240);
     }
 

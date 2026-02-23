@@ -55,11 +55,21 @@ final class ReceiverBrowser: ObservableObject {
             // The .local mDNS hostname for resolution
             let mdnsHost = "\(hostname).local"
 
+            // Parse TXT record for proto version
+            var protoVersion: UInt8? = nil
+            if case .bonjour(let txt) = result.metadata {
+                let dict = txt.dictionary
+                if let val = dict["proto"], let n = UInt8(val) {
+                    protoVersion = n
+                }
+            }
+
             let info = ReceiverInfo(
                 id: name,
                 displayName: name,
                 host: mdnsHost,
-                port: 4010
+                port: 4010,
+                protoVersion: protoVersion
             )
             found.append(info)
         }
