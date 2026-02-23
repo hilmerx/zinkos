@@ -1,0 +1,9 @@
+<service-group>
+  <name replace-wildcards="yes">Zinkos on %h</name>
+  <service>
+    <type>_zinkos._udp</type>
+    <port>4010</port>
+    <txt-record>version=1</txt-record>
+    <txt-record>format=s16le-44100-2ch</txt-record>
+  </service>
+</service-group>

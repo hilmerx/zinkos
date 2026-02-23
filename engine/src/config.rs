@@ -31,7 +31,7 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            target_ip: "192.168.1.100".to_string(),
+            target_ip: "0.0.0.0".to_string(),
             target_port: DEFAULT_PORT,
             ring_buffer_frames: RING_BUFFER_FRAMES,
         }

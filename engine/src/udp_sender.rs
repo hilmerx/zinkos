@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 
 use crate::config::{DSCP_EF, UDP_SNDBUF_SIZE};
 
@@ -12,9 +12,14 @@ pub struct UdpSender {
 impl UdpSender {
     pub fn new(target_ip: &str, target_port: u16) -> io::Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0")?;
-        let target: SocketAddr = format!("{target_ip}:{target_port}").parse().map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("bad address: {e}"))
-        })?;
+        // Use ToSocketAddrs for DNS/mDNS resolution — resolves both raw IPs
+        // (e.g. "192.168.1.87") and hostnames (e.g. "1337.local")
+        let target = format!("{target_ip}:{target_port}")
+            .to_socket_addrs()?
+            .find(|a| a.is_ipv4())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable,
+                format!("cannot resolve {target_ip}")
+            ))?;
 
         // Set send buffer size
         Self::set_sndbuf(&socket, UDP_SNDBUF_SIZE)?;

@@ -12,6 +12,10 @@ Makefile
 .DS_Store
 *.dSYM/
 
+# Swift
+sender/app/.build/
+sender/app/.swiftpm/
+
 # IDE
 .vscode/
 .idea/

@@ -22,7 +22,7 @@ ZinkosDriverState gDriverState = {};
 // ============================================================
 
 static const char* kConfigAppID = "com.zinkos.driver";
-static const char* kDefaultIP = "192.168.1.87";
+static const char* kDefaultIP = "0.0.0.0";
 static const uint16_t kDefaultPort = 4010;
 static const uint32_t kDefaultLatencyOffsetMs = 0;
 static const char* kVolumeStatePath = "/Library/Preferences/Audio/com.zinkos.volume";
@@ -67,47 +67,64 @@ static void LoadVolumeState()
 
 static void LoadConfig()
 {
-    CFStringRef appID = CFStringCreateWithCString(kCFAllocatorDefault, kConfigAppID, kCFStringEncodingUTF8);
+    // Read plist file directly from /Library/Preferences/ — the driver runs
+    // as _coreaudiod in a sandboxed service helper and cannot see user-domain
+    // preferences. CLI/app write here with: sudo defaults write /Library/Preferences/com.zinkos.driver ...
+    static const char* kPlistPath = "/Library/Preferences/com.zinkos.driver.plist";
 
-    // ReceiverIP
     strlcpy(gDriverState.targetIP, kDefaultIP, sizeof(gDriverState.targetIP));
-    CFStringRef ipKey = CFSTR("ReceiverIP");
-    CFPropertyListRef ipVal = CFPreferencesCopyAppValue(ipKey, appID);
-    if (ipVal && CFGetTypeID(ipVal) == CFStringGetTypeID()) {
-        CFStringGetCString((CFStringRef)ipVal, gDriverState.targetIP, sizeof(gDriverState.targetIP), kCFStringEncodingUTF8);
-    }
-    if (ipVal) CFRelease(ipVal);
-
-    // ReceiverPort
     gDriverState.targetPort = kDefaultPort;
-    CFStringRef portKey = CFSTR("ReceiverPort");
-    CFPropertyListRef portVal = CFPreferencesCopyAppValue(portKey, appID);
-    if (portVal && CFGetTypeID(portVal) == CFNumberGetTypeID()) {
-        int64_t portNum = 0;
-        CFNumberGetValue((CFNumberRef)portVal, kCFNumberSInt64Type, &portNum);
-        if (portNum > 0 && portNum <= 65535) {
-            gDriverState.targetPort = (uint16_t)portNum;
-        }
-    }
-    if (portVal) CFRelease(portVal);
-
-    // LatencyOffsetMs
     gDriverState.latencyOffsetMs = kDefaultLatencyOffsetMs;
-    CFStringRef latencyKey = CFSTR("LatencyOffsetMs");
-    CFPropertyListRef latencyVal = CFPreferencesCopyAppValue(latencyKey, appID);
-    if (latencyVal && CFGetTypeID(latencyVal) == CFNumberGetTypeID()) {
-        int64_t latencyNum = 0;
-        CFNumberGetValue((CFNumberRef)latencyVal, kCFNumberSInt64Type, &latencyNum);
-        if (latencyNum >= 0) {
-            gDriverState.latencyOffsetMs = (uint32_t)latencyNum;
+
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(
+        kCFAllocatorDefault, (const UInt8*)kPlistPath, strlen(kPlistPath), false);
+    if (url) {
+        CFReadStreamRef stream = CFReadStreamCreateWithFile(kCFAllocatorDefault, url);
+        CFRelease(url);
+
+        if (stream) {
+            if (CFReadStreamOpen(stream)) {
+                CFPropertyListRef plist = CFPropertyListCreateWithStream(
+                    kCFAllocatorDefault, stream, 0, kCFPropertyListImmutable, NULL, NULL);
+                CFReadStreamClose(stream);
+
+                if (plist && CFGetTypeID(plist) == CFDictionaryGetTypeID()) {
+                    CFDictionaryRef dict = (CFDictionaryRef)plist;
+
+                    // ReceiverIP
+                    CFStringRef ipVal = (CFStringRef)CFDictionaryGetValue(dict, CFSTR("ReceiverIP"));
+                    if (ipVal && CFGetTypeID(ipVal) == CFStringGetTypeID()) {
+                        CFStringGetCString(ipVal, gDriverState.targetIP, sizeof(gDriverState.targetIP), kCFStringEncodingUTF8);
+                    }
+
+                    // ReceiverPort
+                    CFNumberRef portVal = (CFNumberRef)CFDictionaryGetValue(dict, CFSTR("ReceiverPort"));
+                    if (portVal && CFGetTypeID(portVal) == CFNumberGetTypeID()) {
+                        int64_t portNum = 0;
+                        CFNumberGetValue(portVal, kCFNumberSInt64Type, &portNum);
+                        if (portNum > 0 && portNum <= 65535) {
+                            gDriverState.targetPort = (uint16_t)portNum;
+                        }
+                    }
+
+                    // LatencyOffsetMs
+                    CFNumberRef latencyVal = (CFNumberRef)CFDictionaryGetValue(dict, CFSTR("LatencyOffsetMs"));
+                    if (latencyVal && CFGetTypeID(latencyVal) == CFNumberGetTypeID()) {
+                        int64_t latencyNum = 0;
+                        CFNumberGetValue(latencyVal, kCFNumberSInt64Type, &latencyNum);
+                        if (latencyNum >= 0) {
+                            gDriverState.latencyOffsetMs = (uint32_t)latencyNum;
+                        }
+                    }
+                }
+                if (plist) CFRelease(plist);
+            }
+            CFRelease(stream);
         }
     }
-    if (latencyVal) CFRelease(latencyVal);
 
     // Volume/mute state (persisted via plain file — CFPreferences blocked in coreaudiod)
     LoadVolumeState();
-
-    CFRelease(appID);
 
     os_log(sLog, "LoadConfig: IP=%{public}s port=%u latencyOffset=%ums volume=%.2f muted=%d",
            gDriverState.targetIP, gDriverState.targetPort, gDriverState.latencyOffsetMs,
@@ -298,27 +315,46 @@ static OSStatus ZinkosStartIO(AudioServerPlugInDriverRef /*inDriver*/, AudioObje
         return kAudioHardwareNoError;
     }
 
-    // Lazily create engine on first StartIO (deferred from Initialize)
-    if (!gDriverState.engine) {
-        gDriverState.engine = zinkos_engine_create(gDriverState.targetIP, gDriverState.targetPort);
-        if (!gDriverState.engine) {
-            os_log_error(sLog, "ZinkosStartIO: failed to create engine");
-            return kAudioHardwareUnspecifiedError;
-        }
-        os_log(sLog, "ZinkosStartIO: engine created");
+    // Re-read config on every StartIO so plist changes take effect without
+    // needing to reload the entire driver.
+    LoadConfig();
+
+    // Tear down old engine if one exists (config may have changed)
+    if (gDriverState.engine) {
+        zinkos_engine_stop(gDriverState.engine);
+        zinkos_engine_destroy(gDriverState.engine);
+        gDriverState.engine = nullptr;
     }
 
-    int32_t ret = zinkos_engine_start(gDriverState.engine);
-    if (ret != 0) {
-        os_log_error(sLog, "ZinkosStartIO: engine start failed");
-        return kAudioHardwareUnspecifiedError;
+    // Skip engine creation if no valid IP is configured — the driver still
+    // shows up as a device, IO callbacks still run (writing silence), but
+    // nothing is sent on the network. This prevents coreaudiod hangs.
+    if (strcmp(gDriverState.targetIP, "0.0.0.0") == 0 ||
+        gDriverState.targetIP[0] == '\0') {
+        os_log(sLog, "ZinkosStartIO: no receiver IP configured, running without network");
+    } else {
+        gDriverState.engine = zinkos_engine_create(gDriverState.targetIP, gDriverState.targetPort);
+        if (!gDriverState.engine) {
+            os_log_error(sLog, "ZinkosStartIO: failed to create engine for %{public}s:%u — running without network",
+                         gDriverState.targetIP, gDriverState.targetPort);
+        } else {
+            int32_t ret = zinkos_engine_start(gDriverState.engine);
+            if (ret != 0) {
+                os_log_error(sLog, "ZinkosStartIO: engine start failed — running without network");
+                zinkos_engine_destroy(gDriverState.engine);
+                gDriverState.engine = nullptr;
+            } else {
+                os_log(sLog, "ZinkosStartIO: streaming to %{public}s:%u",
+                       gDriverState.targetIP, gDriverState.targetPort);
+            }
+        }
     }
 
     gDriverState.anchorHostTime = mach_absolute_time();
     gDriverState.anchorSampleTime = 0;
     gDriverState.ioRunning = true;
 
-    os_log(sLog, "ZinkosStartIO: streaming started");
+    os_log(sLog, "ZinkosStartIO: IO started (engine=%s)", gDriverState.engine ? "active" : "none");
     return kAudioHardwareNoError;
 }
 

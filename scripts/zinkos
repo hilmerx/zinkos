@@ -15,7 +15,7 @@ RED='\033[38;5;160m'
 GREEN='\033[38;5;107m'
 
 # ── Constants ───────────────────────────────────────────────
-PLIST_DOMAIN="com.zinkos.driver"
+PLIST_PATH="/Library/Preferences/com.zinkos.driver"
 DRIVER_PATH="/Library/Audio/Plug-Ins/HAL/Zinkos.driver"
 SYMLINK_PATH="/usr/local/bin/zinkos"
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
@@ -56,7 +56,7 @@ label() {
 
 # Read a plist value, return empty string if not set
 plist_read() {
-    defaults read "$PLIST_DOMAIN" "$1" 2>/dev/null || echo ""
+    defaults read "$PLIST_PATH" "$1" 2>/dev/null || echo ""
 }
 
 # ── Commands ────────────────────────────────────────────────
@@ -112,7 +112,7 @@ cmd_set() {
                 error "Invalid IP address: $value"
                 exit 1
             fi
-            defaults write "$PLIST_DOMAIN" ReceiverIP -string "$value"
+            sudo defaults write "$PLIST_PATH" ReceiverIP -string "$value"
             success "Receiver IP set to ${BOLD}$value${RESET}"
             ;;
         port)
@@ -120,7 +120,7 @@ cmd_set() {
                 error "Invalid port: $value (must be 1–65535)"
                 exit 1
             fi
-            defaults write "$PLIST_DOMAIN" ReceiverPort -int "$value"
+            sudo defaults write "$PLIST_PATH" ReceiverPort -int "$value"
             success "Receiver port set to ${BOLD}$value${RESET}"
             ;;
         latency)
@@ -128,7 +128,7 @@ cmd_set() {
                 error "Invalid latency: $value (must be a non-negative integer in ms)"
                 exit 1
             fi
-            defaults write "$PLIST_DOMAIN" LatencyOffsetMs -int "$value"
+            sudo defaults write "$PLIST_PATH" LatencyOffsetMs -int "$value"
             success "Latency offset set to ${BOLD}${value} ms${RESET}"
             ;;
         *)

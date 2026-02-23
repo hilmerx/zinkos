@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="Zinkos" width="200">
+  <img src="logo.png" alt="ZINKOS" width="200">
 </p>
 
 <h3 align="center">Ultra low-latency Wi-Fi audio streaming</h3>
@@ -21,14 +21,15 @@ Watch films, YouTube, game, or video call — all in sync with your wirelessly c
 </p>
 
 
-Zinkos appears as a native sound output in macOS — no menu bar app, no background process to manage. Just select it like you would AirPods or built-in speakers. All system audio is captured and streamed instantly.
+Zinkos appears as a native sound output in macOS — just select it like you would AirPods or built-in speakers. Receivers are discovered automatically via Bonjour/mDNS — open the setup app, pick your receiver, done. All system audio is captured and streamed instantly.
 
 - **Free and open source** — MIT licensed, no accounts, no subscriptions, no cloud
 - **No special hardware** — any Mac as sender, any Linux box as receiver (Raspberry Pi, old laptop, anything with ALSA)
 - **Lossless** — uncompressed PCM, bit-perfect audio with no codec artifacts
 - **Low latency** — fast enough for video, casual gaming, and everyday use
 - **Lightweight** — the receiver is a single C binary under 300 lines, runs on a Pi Zero
-- **Simple** — build, set the receiver IP, pick Zinkos in Sound settings, done
+- **Zero-config** — receivers advertise via mDNS, the macOS setup app discovers them automatically
+- **DHCP-safe** — stores mDNS hostnames, not IPs — survives DHCP lease changes
 
 ## How It Works
 
@@ -74,6 +75,7 @@ Zinkos sits between consumer wireless and pro AV gear — no special hardware or
 - Any Linux machine (Raspberry Pi, old laptop, server — anything with ALSA)
 - C compiler — `sudo pacman -S base-devel` (Arch) or `sudo apt install build-essential` (Debian/Ubuntu)
 - ALSA dev headers — `sudo pacman -S alsa-lib` (Arch) or `sudo apt install libasound2-dev` (Debian/Ubuntu)
+- Avahi (optional, for auto-discovery) — `sudo pacman -S avahi` (Arch) or `sudo apt install avahi-daemon` (Debian/Ubuntu)
 
 ### Mac (sender)
 
@@ -89,12 +91,23 @@ mkdir build && cd build && cmake .. && cd ..
 
 # Install the CLI tool system-wide
 ./scripts/zinkos install
+```
 
-# Point to your receiver's IP
-zinkos set ip 192.168.1.87
+**Option A — Setup app (recommended):**
+
+```bash
+cd sender/app && swift build -c release
+# Run the app — discovers receivers automatically via Bonjour
+.build/release/Zinkos
+```
+
+Select your receiver from the list, hit Save & Reload, and pick "Zinkos" in System Settings → Sound → Output.
+
+**Option B — CLI:**
+
+```bash
+zinkos set ip 192.168.1.87   # or a hostname like mypi.local
 zinkos reload
-
-# Select "Zinkos" in System Settings → Sound → Output
 ```
 
 ### Linux (receiver)
@@ -118,6 +131,14 @@ Available audio devices:
 Select device [1-2]:
 ```
 
+## Setup App
+
+The macOS setup app discovers receivers on your network via Bonjour/mDNS — no manual IP entry needed. Select a receiver, configure port and latency, and hit Save & Reload. The app stores mDNS hostnames (e.g. `mypi.local`) so it survives DHCP IP changes automatically.
+
+```bash
+cd sender/app && swift build -c release && .build/release/Zinkos
+```
+
 ## CLI Tool
 
 <p align="center">
@@ -126,7 +147,7 @@ Select device [1-2]:
 
 ```
 zinkos status       # show config + driver health
-zinkos set ip <IP>  # set receiver IP
+zinkos set ip <IP>  # set receiver IP (or hostname like mypi.local)
 zinkos set port <N> # set receiver port
 zinkos rebuild      # compile, validate, install, reload
 zinkos reload       # restart coreaudiod
@@ -140,6 +161,7 @@ zinkos install      # symlink to /usr/local/bin
 | Driver shim | C++ | CoreAudio plugin interface (Apple requires C/C++) |
 | Engine | Rust | Ring buffer, packetizer, UDP sender, drift estimation |
 | Receiver | C | UDP recv, jitter buffer, ALSA playback |
+| Setup app | Swift | Bonjour discovery, config UI, coreaudiod reload |
 | CLI | Bash | Config management, build, reload |
 
 The engine is 100% testable without CoreAudio:
@@ -162,8 +184,8 @@ Fixed across the entire pipeline — no negotiation, no codecs:
 - Configurable sample rate (44.1kHz / 96kHz)
 - Adaptive jitter buffer (auto-tune to network conditions)
 - Clock drift compensation (sample insertion/dropping)
-- Bonjour/mDNS auto-discovery (no manual IP config)
-- macOS Swift menu bar app
+- ~~Bonjour/mDNS auto-discovery (no manual IP config)~~ Done
+- ~~macOS Swift setup app~~ Done
 - Multi-room / multi-receiver support
 - Forward error correction (FEC) for lossy networks
 - Pre-built signed installer (no Xcode or developer certificate needed)

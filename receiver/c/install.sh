@@ -71,6 +71,18 @@ echo
 echo "Installing (requires sudo)..."
 sudo make -C "$SCRIPT_DIR" install-service ALSA_DEVICE="$selected"
 
+# Avahi mDNS discovery (optional)
+if command -v avahi-daemon >/dev/null 2>&1; then
+    echo
+    echo "Installing Avahi mDNS service (makes receiver discoverable)..."
+    sudo make -C "$SCRIPT_DIR" install-avahi
+else
+    echo
+    echo "Note: avahi-daemon not found — mDNS discovery won't work."
+    echo "  Install it for auto-discovery: sudo apt install avahi-daemon"
+    echo "  The receiver still works fine without it (use manual IP)."
+fi
+
 echo
 echo "=== Done ==="
 echo "Zinkos receiver running on $selected"
