@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{EngineConfig, FRAMES_PER_PACKET, PACKET_DURATION_MS};
+use crate::config::EngineConfig;
 use crate::drift::DriftEstimator;
 use crate::pacer::Pacer;
 use crate::packetizer::Packetizer;
@@ -47,9 +47,11 @@ impl ZinkosEngine {
         let stop = Arc::clone(&self.net_stop);
         let ip = self.config.target_ip.clone();
         let port = self.config.target_port;
+        let frames_per_packet = self.config.frames_per_packet;
+        let packet_duration_ms = self.config.packet_duration_ms();
 
         self.net_thread = Some(thread::spawn(move || {
-            network_thread(consumer, state, stop, &ip, port);
+            network_thread(consumer, state, stop, &ip, port, frames_per_packet, packet_duration_ms);
         }));
 
         Ok(())
@@ -100,6 +102,8 @@ fn network_thread(
     stop: Arc<AtomicBool>,
     target_ip: &str,
     target_port: u16,
+    frames_per_packet: u32,
+    packet_duration_ms: u64,
 ) {
     let sender = match UdpSender::new(target_ip, target_port) {
         Ok(s) => s,
@@ -114,8 +118,8 @@ fn network_thread(
 
     let mut packetizer = Packetizer::new();
     let mut drift = DriftEstimator::new();
-    let mut pacer = Pacer::new(Duration::from_millis(PACKET_DURATION_MS as u64));
-    let mut frame_buf = vec![[0i16; 2]; FRAMES_PER_PACKET as usize];
+    let mut pacer = Pacer::new(Duration::from_millis(packet_duration_ms));
+    let mut frame_buf = vec![[0i16; 2]; frames_per_packet as usize];
     let start_time = Instant::now();
 
     while !stop.load(Ordering::Acquire) {
@@ -141,10 +145,12 @@ fn network_thread(
 
 /// Create a new engine. Returns null on failure.
 /// `target_ip` must be a valid C string (null-terminated).
+/// `frames_per_packet` = 0 means use the default (240).
 #[no_mangle]
 pub unsafe extern "C" fn zinkos_engine_create(
     target_ip: *const c_char,
     target_port: u16,
+    frames_per_packet: u32,
 ) -> *mut ZinkosEngine {
     if target_ip.is_null() {
         return std::ptr::null_mut();
@@ -155,9 +161,16 @@ pub unsafe extern "C" fn zinkos_engine_create(
         Err(_) => return std::ptr::null_mut(),
     };
 
+    let fpp = if frames_per_packet == 0 {
+        crate::config::DEFAULT_FRAMES_PER_PACKET
+    } else {
+        frames_per_packet
+    };
+
     let config = EngineConfig {
         target_ip: ip,
         target_port,
+        frames_per_packet: fpp,
         ..EngineConfig::default()
     };
 
@@ -237,6 +250,7 @@ mod tests {
             target_ip: "127.0.0.1".to_string(),
             target_port: port,
             ring_buffer_frames: 4096,
+            ..EngineConfig::default()
         })
     }
 
@@ -308,7 +322,7 @@ mod tests {
     #[test]
     fn ffi_null_safety() {
         unsafe {
-            assert!(zinkos_engine_create(std::ptr::null(), 4010).is_null());
+            assert!(zinkos_engine_create(std::ptr::null(), 4010, 0).is_null());
             assert_eq!(zinkos_engine_start(std::ptr::null_mut()), -1);
             assert_eq!(zinkos_engine_stop(std::ptr::null_mut()), -1);
             assert_eq!(
@@ -328,7 +342,7 @@ mod tests {
 
         unsafe {
             let ip = std::ffi::CString::new("127.0.0.1").unwrap();
-            let engine = zinkos_engine_create(ip.as_ptr(), port);
+            let engine = zinkos_engine_create(ip.as_ptr(), port, 0);
             assert!(!engine.is_null());
 
             assert_eq!(zinkos_engine_start(engine), 0);

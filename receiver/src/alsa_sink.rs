@@ -7,7 +7,7 @@
 mod platform {
     use alsa::pcm::{Access, Format, HwParams, PCM};
     use alsa::{Direction, ValueOr};
-    use zinkos_engine::config::{CHANNELS, FRAMES_PER_PACKET, SAMPLE_RATE};
+    use zinkos_engine::config::{CHANNELS, DEFAULT_DEFAULT_FRAMES_PER_PACKET, SAMPLE_RATE};
 
     pub struct AlsaSink {
         pcm: PCM,
@@ -29,9 +29,9 @@ mod platform {
                     .map_err(|e| format!("ALSA set_format: {e}"))?;
                 hwp.set_access(Access::RWInterleaved)
                     .map_err(|e| format!("ALSA set_access: {e}"))?;
-                hwp.set_period_size(FRAMES_PER_PACKET as i64, ValueOr::Nearest)
+                hwp.set_period_size(DEFAULT_FRAMES_PER_PACKET as i64, ValueOr::Nearest)
                     .map_err(|e| format!("ALSA set_period_size: {e}"))?;
-                hwp.set_buffer_size((FRAMES_PER_PACKET as i64) * 3)
+                hwp.set_buffer_size((DEFAULT_FRAMES_PER_PACKET as i64) * 3)
                     .map_err(|e| format!("ALSA set_buffer_size: {e}"))?;
                 pcm.hw_params(&hwp)
                     .map_err(|e| format!("ALSA hw_params: {e}"))?;
@@ -43,10 +43,10 @@ mod platform {
                     .map_err(|e| format!("ALSA sw_params_current: {e}"))?;
                 // Start hardware after 2 periods are written (~10ms) — not 1 frame (underrun)
                 // and not buffer_size (adds full buffer latency)
-                swp.set_start_threshold(FRAMES_PER_PACKET as i64 * 2)
+                swp.set_start_threshold(DEFAULT_FRAMES_PER_PACKET as i64 * 2)
                     .map_err(|e| format!("ALSA set_start_threshold: {e}"))?;
                 // Wake us from writei block when 1 period of space is available
-                swp.set_avail_min(FRAMES_PER_PACKET as i64)
+                swp.set_avail_min(DEFAULT_FRAMES_PER_PACKET as i64)
                     .map_err(|e| format!("ALSA set_avail_min: {e}"))?;
                 pcm.sw_params(&swp)
                     .map_err(|e| format!("ALSA sw_params: {e}"))?;

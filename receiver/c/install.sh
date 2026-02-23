@@ -66,10 +66,32 @@ selected="${devices[$((choice - 1))]}"
 echo
 echo "Selected: $selected (${descriptions[$((choice - 1))]})"
 
+# Buffer settings
+echo
+echo "Latency tuning (press Enter for defaults):"
+read -rp "  Start-fill buffer in ms [15]: " fill_ms
+fill_ms="${fill_ms:-15}"
+if ! [[ "$fill_ms" =~ ^[0-9]+$ ]] || [ "$fill_ms" -lt 1 ] || [ "$fill_ms" -gt 500 ]; then
+    echo "  Invalid value, using default (15 ms)."
+    fill_ms=15
+fi
+
+read -rp "  ALSA period in frames [240]: " period
+period="${period:-240}"
+if ! [[ "$period" =~ ^[0-9]+$ ]] || [ "$period" -lt 48 ] || [ "$period" -gt 4800 ]; then
+    echo "  Invalid value, using default (240 frames)."
+    period=240
+fi
+
+period_ms=$(( period * 1000 / 48000 ))
+buffer_ms=$(( period_ms * 3 ))
+echo
+echo "  Start-fill: ${fill_ms} ms, ALSA period: ${period} frames (~${period_ms} ms), buffer: ~${buffer_ms} ms"
+
 # Install
 echo
 echo "Installing (requires sudo)..."
-sudo make -C "$SCRIPT_DIR" install-service ALSA_DEVICE="$selected"
+sudo make -C "$SCRIPT_DIR" install-service ALSA_DEVICE="$selected" START_FILL_MS="$fill_ms" ALSA_PERIOD="$period"
 
 # Avahi mDNS discovery (optional)
 if command -v avahi-daemon >/dev/null 2>&1; then

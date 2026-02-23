@@ -25,6 +25,7 @@ static const char* kConfigAppID = "com.zinkos.driver";
 static const char* kDefaultIP = "0.0.0.0";
 static const uint16_t kDefaultPort = 4010;
 static const uint32_t kDefaultLatencyOffsetMs = 0;
+static const uint32_t kDefaultFramesPerPacket = 240;
 static const char* kVolumeStatePath = "/Library/Preferences/Audio/com.zinkos.volume";
 
 static uint64_t sLastPersistTime = 0;
@@ -75,6 +76,7 @@ static void LoadConfig()
     strlcpy(gDriverState.targetIP, kDefaultIP, sizeof(gDriverState.targetIP));
     gDriverState.targetPort = kDefaultPort;
     gDriverState.latencyOffsetMs = kDefaultLatencyOffsetMs;
+    gDriverState.framesPerPacket = kDefaultFramesPerPacket;
 
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(
         kCFAllocatorDefault, (const UInt8*)kPlistPath, strlen(kPlistPath), false);
@@ -116,6 +118,16 @@ static void LoadConfig()
                             gDriverState.latencyOffsetMs = (uint32_t)latencyNum;
                         }
                     }
+
+                    // FramesPerPacket
+                    CFNumberRef fppVal = (CFNumberRef)CFDictionaryGetValue(dict, CFSTR("FramesPerPacket"));
+                    if (fppVal && CFGetTypeID(fppVal) == CFNumberGetTypeID()) {
+                        int64_t fppNum = 0;
+                        CFNumberGetValue(fppVal, kCFNumberSInt64Type, &fppNum);
+                        if (fppNum >= 48 && fppNum <= 4800) {
+                            gDriverState.framesPerPacket = (uint32_t)fppNum;
+                        }
+                    }
                 }
                 if (plist) CFRelease(plist);
             }
@@ -126,9 +138,9 @@ static void LoadConfig()
     // Volume/mute state (persisted via plain file — CFPreferences blocked in coreaudiod)
     LoadVolumeState();
 
-    os_log(sLog, "LoadConfig: IP=%{public}s port=%u latencyOffset=%ums volume=%.2f muted=%d",
+    os_log(sLog, "LoadConfig: IP=%{public}s port=%u latencyOffset=%ums fpp=%u volume=%.2f muted=%d",
            gDriverState.targetIP, gDriverState.targetPort, gDriverState.latencyOffsetMs,
-           gDriverState.volumeScalar, gDriverState.muted);
+           gDriverState.framesPerPacket, gDriverState.volumeScalar, gDriverState.muted);
 }
 
 // Forward declarations for vtable functions
@@ -333,7 +345,7 @@ static OSStatus ZinkosStartIO(AudioServerPlugInDriverRef /*inDriver*/, AudioObje
         gDriverState.targetIP[0] == '\0') {
         os_log(sLog, "ZinkosStartIO: no receiver IP configured, running without network");
     } else {
-        gDriverState.engine = zinkos_engine_create(gDriverState.targetIP, gDriverState.targetPort);
+        gDriverState.engine = zinkos_engine_create(gDriverState.targetIP, gDriverState.targetPort, gDriverState.framesPerPacket);
         if (!gDriverState.engine) {
             os_log_error(sLog, "ZinkosStartIO: failed to create engine for %{public}s:%u — running without network",
                          gDriverState.targetIP, gDriverState.targetPort);

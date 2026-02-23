@@ -40,6 +40,7 @@ struct ZinkosDriverState {
     char targetIP[256];       // receiver IP address
     uint16_t targetPort;      // receiver UDP port
     uint32_t latencyOffsetMs; // user-configurable latency offset
+    uint32_t framesPerPacket; // frames per UDP packet (default 240 = 5ms @ 48kHz)
 };
 
 // Global driver state (singleton — CoreAudio loads one instance)

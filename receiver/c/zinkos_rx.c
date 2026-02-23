@@ -25,9 +25,8 @@
 #define PROTO_MAGIC     0x5A4B  /* "ZK" little-endian */
 #define PROTO_VERSION   1
 
-/* 60ms start fill = 2880 frames.
-   After ALSA pre-fill (~1680), leaves ~1200 frames cushion in ring buffer. */
-#define START_FILL_MS   15
+/* Default start fill — overridable via argv[2] */
+#define DEFAULT_START_FILL_MS   15
 
 static uint8_t ring[RING_FRAMES * FRAME_BYTES];
 static volatile uint32_t wpos_frames = 0;
@@ -120,6 +119,18 @@ static void *recv_thread(void *arg) {
 
 int main(int argc, char **argv) {
   const char *alsa_dev = (argc > 1) ? argv[1] : "hw:0,0";
+  uint32_t start_fill_ms = DEFAULT_START_FILL_MS;
+  uint32_t period_frames = 240;
+  if (argc > 2) {
+    int val = atoi(argv[2]);
+    if (val > 0 && val <= 500) start_fill_ms = (uint32_t)val;
+    else fprintf(stderr, "Ignoring invalid start-fill %s ms (valid: 1–500)\n", argv[2]);
+  }
+  if (argc > 3) {
+    int val = atoi(argv[3]);
+    if (val >= 48 && val <= 4800) period_frames = (uint32_t)val;
+    else fprintf(stderr, "Ignoring invalid period %s frames (valid: 48–4800)\n", argv[3]);
+  }
 
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) { perror("socket"); return 1; }
@@ -155,8 +166,8 @@ int main(int argc, char **argv) {
   unsigned int rate = SAMPLE_RATE;
   snd_pcm_hw_params_set_rate_near(pcm, hw, &rate, NULL);
 
-  snd_pcm_uframes_t period = 240;
-  snd_pcm_uframes_t buffer = period * 3;   // 40ms ALSA buffer
+  snd_pcm_uframes_t period = period_frames;
+  snd_pcm_uframes_t buffer = period * 3;
 
   snd_pcm_hw_params_set_period_size_near(pcm, hw, &period, NULL);
   snd_pcm_hw_params_set_buffer_size_near(pcm, hw, &buffer);
@@ -192,9 +203,9 @@ int main(int argc, char **argv) {
 
   uint8_t out[1024 * FRAME_BYTES];
 
-  const uint32_t start_fill_frames = (START_FILL_MS * SAMPLE_RATE) / 1000;
+  const uint32_t start_fill_frames = (start_fill_ms * SAMPLE_RATE) / 1000;
   fprintf(stderr, "Zinkos RX UDP :%d @ %uHz, ALSA %s, start fill ~%ums (%u frames)\n",
-          PORT, rate, alsa_dev, START_FILL_MS, start_fill_frames);
+          PORT, rate, alsa_dev, start_fill_ms, start_fill_frames);
 
   // Wait for ring buffer to accumulate enough
   while (rb_used_frames() < start_fill_frames) {

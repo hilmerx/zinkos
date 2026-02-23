@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use clap::Parser;
-use zinkos_engine::config::{DEFAULT_PORT, FRAMES_PER_PACKET, PACKET_BYTES};
+use zinkos_engine::config::{DEFAULT_PORT, DEFAULT_FRAMES_PER_PACKET};
 
 use alsa_sink::AlsaSink;
 use jitter_buffer::{JitterBuffer, JitterState};
@@ -83,7 +83,7 @@ fn receive_loop(
 
     println!("Listening on {addr}");
 
-    let mut buf = [0u8; PACKET_BYTES as usize + 64]; // slight oversize for safety
+    let mut buf = [0u8; 2048]; // oversized to handle any frames_per_packet
 
     while running.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
@@ -108,7 +108,7 @@ fn playback_loop(
 ) {
     let mut sink = AlsaSink::open(device).expect("failed to open audio output");
 
-    let frames_per_write = FRAMES_PER_PACKET as usize;
+    let frames_per_write = DEFAULT_FRAMES_PER_PACKET as usize;
     let sleep_duration = Duration::from_millis(4); // slightly less than 5ms to stay ahead
 
     while running.load(Ordering::Relaxed) {

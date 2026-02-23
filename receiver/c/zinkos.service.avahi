@@ -5,5 +5,7 @@
     <port>4010</port>
     <txt-record>proto=1</txt-record>
     <txt-record>format=s16le-48000-2ch</txt-record>
+    <txt-record>fill=%FILL_MS%</txt-record>
+    <txt-record>period=%PERIOD%</txt-record>
   </service>
 </service-group>

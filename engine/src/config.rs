@@ -4,17 +4,13 @@ pub const CHANNELS: u32 = 2;
 pub const BYTES_PER_SAMPLE: u32 = 2; // S16_LE
 pub const BYTES_PER_FRAME: u32 = CHANNELS * BYTES_PER_SAMPLE; // 4
 
-/// Packet timing
-pub const PACKET_DURATION_MS: u32 = 5;
-/// 5ms × 48000 / 1000 = 240 (exact integer)
-pub const FRAMES_PER_PACKET: u32 = 240;
-pub const PAYLOAD_BYTES: u32 = FRAMES_PER_PACKET * BYTES_PER_FRAME; // 960
+/// Packet timing defaults
+pub const DEFAULT_FRAMES_PER_PACKET: u32 = 240;
 pub const HEADER_BYTES: u32 = 20;
 
 /// Protocol constants
 pub const PROTO_MAGIC: u16 = 0x5A4B; // "ZK"
 pub const PROTO_VERSION: u8 = 1;
-pub const PACKET_BYTES: u32 = HEADER_BYTES + PAYLOAD_BYTES; // 976
 
 /// Ring buffer sizing — enough for ~100ms of audio
 pub const RING_BUFFER_FRAMES: usize = 4800;
@@ -30,6 +26,7 @@ pub struct EngineConfig {
     pub target_ip: String,
     pub target_port: u16,
     pub ring_buffer_frames: usize,
+    pub frames_per_packet: u32,
 }
 
 impl Default for EngineConfig {
@@ -38,7 +35,20 @@ impl Default for EngineConfig {
             target_ip: "0.0.0.0".to_string(),
             target_port: DEFAULT_PORT,
             ring_buffer_frames: RING_BUFFER_FRAMES,
+            frames_per_packet: DEFAULT_FRAMES_PER_PACKET,
         }
+    }
+}
+
+impl EngineConfig {
+    /// Packet duration in milliseconds, derived from frames_per_packet.
+    pub fn packet_duration_ms(&self) -> u64 {
+        (self.frames_per_packet as u64 * 1000) / SAMPLE_RATE as u64
+    }
+
+    /// Total packet size in bytes (header + payload).
+    pub fn packet_bytes(&self) -> usize {
+        HEADER_BYTES as usize + self.frames_per_packet as usize * BYTES_PER_FRAME as usize
     }
 }
 
@@ -49,14 +59,19 @@ mod tests {
     #[test]
     fn audio_format_constants() {
         assert_eq!(BYTES_PER_FRAME, 4);
-        assert_eq!(PAYLOAD_BYTES, 960);
-        assert_eq!(PACKET_BYTES, 980);
-        assert_eq!(FRAMES_PER_PACKET, 240);
+        assert_eq!(DEFAULT_FRAMES_PER_PACKET, 240);
     }
 
     #[test]
-    fn packet_fits_in_mtu() {
-        assert!(PACKET_BYTES < 1400, "packet must fit in typical MTU");
+    fn default_packet_fits_in_mtu() {
+        let cfg = EngineConfig::default();
+        assert!(cfg.packet_bytes() < 1400, "packet must fit in typical MTU");
+    }
+
+    #[test]
+    fn packet_duration_correct() {
+        let cfg = EngineConfig::default();
+        assert_eq!(cfg.packet_duration_ms(), 5); // 240 frames @ 48kHz = 5ms
     }
 
     #[test]

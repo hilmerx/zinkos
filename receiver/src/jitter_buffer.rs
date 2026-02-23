@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use zinkos_engine::config::{FRAMES_PER_PACKET, HEADER_BYTES, PROTO_VERSION, SAMPLE_RATE};
+use zinkos_engine::config::{DEFAULT_FRAMES_PER_PACKET, HEADER_BYTES, PROTO_VERSION, SAMPLE_RATE};
 use zinkos_engine::packetizer::PacketHeader;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,7 +178,7 @@ impl JitterBuffer {
                     }
                 } else if Self::seq_before(next_seq, front.seq) {
                     // Gap — insert silence for the missing packet
-                    let gap_frames = FRAMES_PER_PACKET as usize;
+                    let gap_frames = DEFAULT_FRAMES_PER_PACKET as usize;
                     let silence_count = remaining.min(gap_frames);
                     out.extend(std::iter::repeat([0i16; 2]).take(silence_count));
                     remaining -= silence_count;
@@ -229,12 +229,12 @@ mod tests {
         let mut jb = JitterBuffer::new(5); // 5ms = ~221 frames
         let mut pkt = Packetizer::new();
 
-        let frames = vec![[100i16, 200i16]; FRAMES_PER_PACKET as usize];
+        let frames = vec![[100i16, 200i16]; DEFAULT_FRAMES_PER_PACKET as usize];
         let raw = make_packet(&mut pkt, &frames);
         jb.push(&raw);
 
         assert_eq!(jb.state(), JitterState::Playing);
-        assert_eq!(jb.buffered_frames(), FRAMES_PER_PACKET as usize);
+        assert_eq!(jb.buffered_frames(), DEFAULT_FRAMES_PER_PACKET as usize);
     }
 
     #[test]
@@ -242,7 +242,7 @@ mod tests {
         let mut jb = JitterBuffer::new(5);
         let mut pkt = Packetizer::new();
 
-        let frames: Vec<[i16; 2]> = (0..FRAMES_PER_PACKET)
+        let frames: Vec<[i16; 2]> = (0..DEFAULT_FRAMES_PER_PACKET)
             .map(|i| [i as i16, -(i as i16)])
             .collect();
         let raw = make_packet(&mut pkt, &frames);
@@ -260,13 +260,13 @@ mod tests {
         let mut jb = JitterBuffer::new(5);
         let mut pkt = Packetizer::new();
 
-        let frames = vec![[1i16, 2]; FRAMES_PER_PACKET as usize];
+        let frames = vec![[1i16, 2]; DEFAULT_FRAMES_PER_PACKET as usize];
         let raw = make_packet(&mut pkt, &frames);
         jb.push(&raw);
         assert_eq!(jb.state(), JitterState::Playing);
 
         // Consume all frames
-        jb.pop_frames(FRAMES_PER_PACKET as usize);
+        jb.pop_frames(DEFAULT_FRAMES_PER_PACKET as usize);
 
         // Next pop triggers underrun
         let out = jb.pop_frames(10);
@@ -281,7 +281,7 @@ mod tests {
         let mut pkt = Packetizer::new();
 
         // Push packet 0
-        let frames = vec![[10i16, 20]; FRAMES_PER_PACKET as usize];
+        let frames = vec![[10i16, 20]; DEFAULT_FRAMES_PER_PACKET as usize];
         let raw0 = make_packet(&mut pkt, &frames);
         jb.push(&raw0);
 
@@ -291,13 +291,13 @@ mod tests {
         jb.push(&raw2);
 
         // Pop all of packet 0
-        let out = jb.pop_frames(FRAMES_PER_PACKET as usize);
-        assert_eq!(out.len(), FRAMES_PER_PACKET as usize);
+        let out = jb.pop_frames(DEFAULT_FRAMES_PER_PACKET as usize);
+        assert_eq!(out.len(), DEFAULT_FRAMES_PER_PACKET as usize);
         assert_eq!(out[0], [10, 20]);
 
         // Next pop should produce silence (gap for missing packet 1)
-        let out2 = jb.pop_frames(FRAMES_PER_PACKET as usize);
-        assert_eq!(out2.len(), FRAMES_PER_PACKET as usize);
+        let out2 = jb.pop_frames(DEFAULT_FRAMES_PER_PACKET as usize);
+        assert_eq!(out2.len(), DEFAULT_FRAMES_PER_PACKET as usize);
         assert!(out2.iter().all(|f| *f == [0, 0]), "gap should be silence");
         assert!(jb.silence_frames_inserted > 0);
     }
@@ -309,8 +309,8 @@ mod tests {
         let mut jb = JitterBuffer::new(6);
         let mut pkt = Packetizer::new();
 
-        let frames0 = vec![[10i16, 10]; FRAMES_PER_PACKET as usize];
-        let frames1 = vec![[20i16, 20]; FRAMES_PER_PACKET as usize];
+        let frames0 = vec![[10i16, 10]; DEFAULT_FRAMES_PER_PACKET as usize];
+        let frames1 = vec![[20i16, 20]; DEFAULT_FRAMES_PER_PACKET as usize];
 
         let raw0 = make_packet(&mut pkt, &frames0);
         let raw1 = make_packet(&mut pkt, &frames1);
@@ -331,12 +331,12 @@ mod tests {
         let mut jb = JitterBuffer::new(5);
         let mut pkt = Packetizer::new();
 
-        let frames = vec![[1i16, 2]; FRAMES_PER_PACKET as usize];
+        let frames = vec![[1i16, 2]; DEFAULT_FRAMES_PER_PACKET as usize];
         let raw = make_packet(&mut pkt, &frames);
         jb.push(&raw);
 
         // Drain to underrun
-        jb.pop_frames(FRAMES_PER_PACKET as usize);
+        jb.pop_frames(DEFAULT_FRAMES_PER_PACKET as usize);
         jb.pop_frames(1);
         assert_eq!(jb.state(), JitterState::Underrun);
 
@@ -354,7 +354,7 @@ mod tests {
         let mut jb = JitterBuffer::new(5);
         let mut pkt = Packetizer::new();
 
-        let frames = vec![[0i16; 2]; FRAMES_PER_PACKET as usize];
+        let frames = vec![[0i16; 2]; DEFAULT_FRAMES_PER_PACKET as usize];
         for _ in 0..5 {
             let raw = make_packet(&mut pkt, &frames);
             jb.push(&raw);

@@ -6,6 +6,7 @@ struct MenuView: View {
     @State private var manualIP: String = ""
     @State private var portText: String = ""
     @State private var latencyText: String = ""
+    @State private var periodText: String = ""
     @State private var dirty = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
@@ -14,6 +15,7 @@ struct MenuView: View {
     private var currentIP: String? { PlistConfig.currentIP }
     private var currentPort: UInt16 { PlistConfig.currentPort }
     private var currentLatency: UInt32 { PlistConfig.latencyOffset }
+    private var currentPeriod: UInt32 { PlistConfig.framesPerPacket }
 
     private var isValidIP: Bool {
         let val = manualIP.trimmingCharacters(in: .whitespaces)
@@ -34,8 +36,13 @@ struct MenuView: View {
         UInt32(latencyText) != nil
     }
 
+    private var isValidPeriod: Bool {
+        guard let val = UInt32(periodText) else { return false }
+        return val >= 48 && val <= 4800
+    }
+
     private var canSave: Bool {
-        isValidIP && isValidPort && isValidLatency
+        isValidIP && isValidPort && isValidLatency && isValidPeriod
     }
 
     var body: some View {
@@ -168,6 +175,21 @@ struct MenuView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                HStack {
+                    Text("Period")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 50, alignment: .leading)
+                    TextField("240", text: $periodText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(isValidPeriod ? .primary : .red)
+                        .onChange(of: periodText) { _ in dirty = true; statusMessage = nil }
+                    Text("frames")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Button {
                     saveAndReload()
                 } label: {
@@ -205,6 +227,7 @@ struct MenuView: View {
         manualIP = currentIP ?? ""
         portText = "\(currentPort)"
         latencyText = "\(currentLatency)"
+        periodText = "\(currentPeriod)"
         dirty = false
         statusMessage = nil
     }
@@ -235,6 +258,7 @@ struct MenuView: View {
         let ip = manualIP.trimmingCharacters(in: .whitespaces)
         let port = UInt16(portText) ?? 4010
         let latency = UInt32(latencyText) ?? 0
+        let period = UInt32(periodText) ?? 240
 
         errorMessage = nil
         saving = true
@@ -251,7 +275,7 @@ struct MenuView: View {
                     return
                 }
 
-                PlistConfig.saveSettings(ip: ip, port: port, latency: latency)
+                PlistConfig.saveSettings(ip: ip, port: port, latency: latency, framesPerPacket: period)
                 AudioDaemon.restartCoreAudio()
                 dirty = false
                 statusMessage = "Saved — reloading"

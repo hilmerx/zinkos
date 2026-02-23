@@ -11,7 +11,7 @@
 use std::time::{Duration, Instant};
 
 use zinkos_engine::config::{
-    EngineConfig, CHANNELS, FRAMES_PER_PACKET, SAMPLE_RATE,
+    EngineConfig, CHANNELS, DEFAULT_FRAMES_PER_PACKET, SAMPLE_RATE,
 };
 use zinkos_engine::ffi::ZinkosEngine;
 use zinkos_engine::pacer::Pacer;
@@ -57,7 +57,7 @@ fn main() {
     engine.start().expect("failed to start engine");
     println!("Engine started, streaming...");
 
-    let frames_per_chunk = FRAMES_PER_PACKET as usize;
+    let frames_per_chunk = DEFAULT_FRAMES_PER_PACKET as usize;
     let samples_per_chunk = frames_per_chunk * CHANNELS as usize;
     let chunk_duration = Duration::from_nanos(
         (frames_per_chunk as u64 * 1_000_000_000) / SAMPLE_RATE as u64,

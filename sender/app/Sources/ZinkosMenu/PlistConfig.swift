@@ -25,15 +25,21 @@ struct PlistConfig {
         return val >= 0 ? UInt32(val) : 0
     }
 
+    static var framesPerPacket: UInt32 {
+        let val = readDict()?["FramesPerPacket"] as? Int ?? 0
+        return val >= 48 && val <= 4800 ? UInt32(val) : 240
+    }
+
     /// Write all settings via AppleScript (triggers admin password prompt).
     /// This writes to /Library/Preferences/ which the driver can read.
-    static func saveSettings(ip: String, port: UInt16, latency: UInt32) {
+    static func saveSettings(ip: String, port: UInt16, latency: UInt32, framesPerPacket: UInt32) {
         var cmds: [String] = []
         if !ip.isEmpty {
             cmds.append("defaults write /Library/Preferences/com.zinkos.driver ReceiverIP -string '\(ip)'")
         }
         cmds.append("defaults write /Library/Preferences/com.zinkos.driver ReceiverPort -int \(port)")
         cmds.append("defaults write /Library/Preferences/com.zinkos.driver LatencyOffsetMs -int \(latency)")
+        cmds.append("defaults write /Library/Preferences/com.zinkos.driver FramesPerPacket -int \(framesPerPacket)")
 
         let joined = cmds.joined(separator: " && ")
         let script = "do shell script \"\(joined)\" with administrator privileges"

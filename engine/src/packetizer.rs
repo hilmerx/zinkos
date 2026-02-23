@@ -1,7 +1,4 @@
-use crate::config::{FRAMES_PER_PACKET, HEADER_BYTES, PROTO_MAGIC, PROTO_VERSION};
-
-#[cfg(test)]
-use crate::config::PACKET_BYTES;
+use crate::config::{HEADER_BYTES, PROTO_MAGIC, PROTO_VERSION};
 
 /// Wire format for Zinkos UDP packets.
 /// All fields are little-endian (both Mac ARM and Pi 5 ARM are LE).
@@ -61,13 +58,9 @@ impl Packetizer {
         Self { seq: 0 }
     }
 
-    /// Build a packet from up to `FRAMES_PER_PACKET` frames of interleaved i16 PCM.
+    /// Build a packet from interleaved i16 PCM frames.
     /// Returns the full packet bytes (header + payload).
     pub fn build_packet(&mut self, pcm_frames: &[[i16; 2]], timestamp_ns: u64) -> Vec<u8> {
-        assert!(
-            pcm_frames.len() <= FRAMES_PER_PACKET as usize,
-            "too many frames for one packet"
-        );
 
         let frame_count = pcm_frames.len() as u32;
         let payload_size = frame_count as usize * 4; // 2 channels × 2 bytes
@@ -115,10 +108,12 @@ mod tests {
 
     #[test]
     fn full_packet_size() {
+        use crate::config::{DEFAULT_FRAMES_PER_PACKET, BYTES_PER_FRAME};
         let mut p = Packetizer::new();
-        let frames = vec![[0i16; 2]; FRAMES_PER_PACKET as usize];
+        let frames = vec![[0i16; 2]; DEFAULT_FRAMES_PER_PACKET as usize];
         let pkt = p.build_packet(&frames, 0);
-        assert_eq!(pkt.len(), PACKET_BYTES as usize);
+        let expected = HEADER_BYTES as usize + DEFAULT_FRAMES_PER_PACKET as usize * BYTES_PER_FRAME as usize;
+        assert_eq!(pkt.len(), expected);
     }
 
     #[test]
@@ -203,10 +198,12 @@ mod tests {
 
     #[test]
     fn partial_packet_smaller() {
+        use crate::config::{DEFAULT_FRAMES_PER_PACKET, BYTES_PER_FRAME};
         let mut p = Packetizer::new();
         let frames = vec![[0i16; 2]; 100];
         let pkt = p.build_packet(&frames, 0);
         assert_eq!(pkt.len(), HEADER_BYTES as usize + 100 * 4);
-        assert!(pkt.len() < PACKET_BYTES as usize);
+        let full_size = HEADER_BYTES as usize + DEFAULT_FRAMES_PER_PACKET as usize * BYTES_PER_FRAME as usize;
+        assert!(pkt.len() < full_size);
     }
 }

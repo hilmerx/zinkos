@@ -9,8 +9,10 @@ extern "C" {
 
 typedef struct ZinkosEngine ZinkosEngine;
 
-/// Create engine. target_ip must be null-terminated. Returns NULL on failure.
-ZinkosEngine* zinkos_engine_create(const char* target_ip, uint16_t target_port);
+/// Create engine. target_ip must be null-terminated.
+/// frames_per_packet = 0 means use the default (240).
+/// Returns NULL on failure.
+ZinkosEngine* zinkos_engine_create(const char* target_ip, uint16_t target_port, uint32_t frames_per_packet);
 
 /// Destroy engine. Safe to call with NULL.
 void zinkos_engine_destroy(ZinkosEngine* engine);
