@@ -186,6 +186,13 @@ struct MenuView: View {
                 .disabled(!canSave || saving)
             }
             .padding(16)
+
+            // Version footer
+            Text("v\(AppDelegate.appVersion)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 8)
         }
         .frame(width: 300)
         .background(.white)

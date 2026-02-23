@@ -12,4 +12,3 @@ let package = Package(
         )
     ]
 )
-me 

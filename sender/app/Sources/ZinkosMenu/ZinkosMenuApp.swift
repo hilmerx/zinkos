@@ -16,6 +16,15 @@ struct ZinkosMenuApp: App {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    static let appVersion: String = {
+        guard let url = Bundle.module.url(forResource: "VERSION", withExtension: nil, subdirectory: "Resources"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return "0.1.0"
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }()
+
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
 
@@ -48,7 +57,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Title + center + bring to front
         DispatchQueue.main.async {
             if let window = NSApplication.shared.windows.first {
-                window.title = "ZINKOS"
+                let version = Self.appVersion
+                window.title = "ZINKOS v\(version)"
                 window.center()
                 window.makeKeyAndOrderFront(nil)
             }

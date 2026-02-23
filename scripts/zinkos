@@ -25,6 +25,17 @@ if [ -L "$SCRIPT_PATH" ]; then
 elif [ -L "$0" ]; then
     SCRIPT_PATH="$(readlink "$0")"
 fi
+SCRIPT_REAL_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_REAL_DIR/.." && pwd)"
+
+# Read version: try repo VERSION file first, then pkg-installed sidecar
+if [ -f "$REPO_DIR/VERSION" ]; then
+    VERSION=$(tr -d '[:space:]' < "$REPO_DIR/VERSION")
+elif [ -f "$SCRIPT_REAL_DIR/.zinkos-version" ]; then
+    VERSION=$(tr -d '[:space:]' < "$SCRIPT_REAL_DIR/.zinkos-version")
+else
+    VERSION="unknown"
+fi
 
 # ── Helpers ─────────────────────────────────────────────────
 
@@ -32,7 +43,7 @@ print_logo() {
     echo -e "${BOLD}${AMBER}"
     echo '  ╔═══════════════════════════════════╗'
     echo '  ║         Z I N K O S               ║'
-    echo '  ║     Wi-Fi Audio Streaming         ║'
+    echo -e "  ║     Wi-Fi Audio Streaming  ${DIM}v${VERSION}${BOLD}${AMBER}  ║"
     echo '  ╚═══════════════════════════════════╝'
     echo -e "${RESET}"
 }
@@ -163,10 +174,8 @@ cmd_install() {
 }
 
 cmd_rebuild() {
-    local repo_dir
-    repo_dir="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
     info "Rebuilding and reloading driver..."
-    "$repo_dir/scripts/reload.sh" "${repo_dir}/build"
+    "$REPO_DIR/scripts/reload.sh" "${REPO_DIR}/build"
 }
 
 cmd_uninstall() {
@@ -177,6 +186,10 @@ cmd_uninstall() {
     info "Removing $SYMLINK_PATH..."
     sudo rm -f "$SYMLINK_PATH"
     success "Uninstalled. Symlink removed."
+}
+
+cmd_version() {
+    echo "$VERSION"
 }
 
 cmd_help() {
@@ -192,6 +205,7 @@ cmd_help() {
     echo -e "    ${BROWN}reload${RESET}              Restart coreaudiod to apply changes"
     echo -e "    ${BROWN}install${RESET}             Symlink to /usr/local/bin for global access"
     echo -e "    ${BROWN}uninstall${RESET}           Remove the global symlink"
+    echo -e "    ${BROWN}version${RESET}             Show version"
     echo -e "    ${BROWN}help${RESET}                Show this help"
     echo ""
 }
@@ -220,6 +234,9 @@ case "${1:-}" in
         ;;
     uninstall)
         cmd_uninstall
+        ;;
+    version|--version|-V)
+        cmd_version
         ;;
     help|--help|-h)
         cmd_help
