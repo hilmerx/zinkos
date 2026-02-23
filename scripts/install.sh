@@ -13,8 +13,16 @@ if [ ! -d "$BUNDLE_PATH" ]; then
     exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLI_PATH="/usr/local/bin/zinkos"
+
 echo "Installing $DRIVER_NAME to $INSTALL_DIR..."
 sudo cp -R "$BUNDLE_PATH" "$INSTALL_DIR/"
+
+# Install CLI symlink
+echo "Installing CLI to $CLI_PATH..."
+sudo ln -sf "$SCRIPT_DIR/zinkos" "$CLI_PATH"
+
 echo "Restarting coreaudiod..."
 sudo killall coreaudiod
 echo "Done. 'Zinkos' should appear in System Settings > Sound > Output."

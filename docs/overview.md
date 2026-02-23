@@ -2,18 +2,18 @@
 
 ## What Is It?
 
-Zinkos is a low-latency Wi-Fi audio streaming system. Select "Zinkos" as output in macOS Sound settings and hear audio through a DAC connected to a Linux machine on the same network. End-to-end latency: **~25ms** — low enough for video sync and casual music listening, far below AirPlay (~2 seconds).
+Zinkos is a low-latency Wi-Fi audio streaming system. Select "Zinkos" as output in macOS Sound settings and hear audio through a DAC connected to a Linux machine on the same network. End-to-end latency: **~9ms tuned / ~25ms default** — low enough for video sync, casual gaming, and music listening, far below AirPlay (~2 seconds).
 
 ```
- MacBook Pro                        Wi-Fi                  Thinkpad (Linux)
+ MacBook Pro                        Wi-Fi                  Linux receiver
 ┌──────────────-───┐              ┌─────────┐            ┌───────-───────────┐
 │  Any app audio   │              │         │            │  UDP recv thread  │
-│       │          │              │  5ms    │            │       │           │
-│       ▼          │              │  UDP    │            │       ▼           │
-│  CoreAudio       │──────────────│ packets │───────────▶│  Ring buffer      │
-│  (mixes all apps)│              │  976B   │            │       │           │
-│       │          │              │  each   │            │       ▼           │
-│       ▼          │              │         │            │  Jitter buffer    │
+│       │          │              │  UDP    │            │       │           │
+│       ▼          │              │ packets │            │       ▼           │
+│  CoreAudio       │──────────────│ (size   │───────────▶│  Ring buffer      │
+│  (mixes all apps)│              │ depends │            │       │           │
+│       │          │              │ on      │            │       ▼           │
+│       ▼          │              │ period) │            │  Jitter buffer    │
 │  Zinkos driver   │              └─────────┘            │       │           │
 │  (volume, encode)│                                     │       ▼           │
 │       │          │                                     │  ALSA → DAC       │
@@ -27,7 +27,7 @@ Zinkos is a low-latency Wi-Fi audio streaming system. Select "Zinkos" as output 
 
 | | Latency | Quality | Codec | Open Source | Cross-platform |
 |---|---|---|---|---|---|
-| **Zinkos** | **~25ms** | **Lossless PCM** | None (raw S16LE) | **Yes** | Mac → Linux |
+| **Zinkos** | **~9ms (tuned) / ~25ms (default)** | **Lossless PCM** | None (raw S16LE) | **Yes** | Mac → Linux |
 | AirPlay 2 | ~2000ms | Lossless (ALAC) | ALAC/AAC | No | Apple only |
 | Bluetooth A2DP (SBC) | ~150–200ms | Lossy | SBC | Spec open, stacks vary | Universal |
 | Bluetooth aptX Low Latency | ~40ms | Lossy | aptX LL | No (Qualcomm) | Needs aptX hardware |
@@ -49,8 +49,8 @@ Latency scale (log):
   ├─ Dante ─────┤            │          │             │             │
   ├─ AVB ───────┤            │          │             │             │
   │        ├─ JACK ──┤       │          │             │             │
-  │             │  ╔═ Zinkos ═╗         │             │             │
-  │             │  ╚══════════╝         │             │             │
+  │       ╔═ Zinkos ═══════════╗        │             │             │
+  │       ╚═ (tuned → default) ╝        │             │             │
   │             ├── BT LE Audio ─┤      │             │             │
   │             │    ├── aptX LL ┤      │             │             │
   │             │            ├ Snapcast ┤             │             │
@@ -96,7 +96,7 @@ Chosen for simplicity. One format everywhere — no codec negotiation, no resamp
 | **cdylib** | A Rust compilation target that produces a C-compatible dynamic library (.dylib on macOS). Looks like a normal C library to the linker — the caller doesn't need to know it's written in Rust. |
 | **DSCP / QoS** | Differentiated Services Code Point — a flag in the IP packet header that tells network equipment to prioritize this traffic. Zinkos marks packets as "Expedited Forwarding" (EF), the highest priority class. Helps on managed networks; most home routers ignore it. |
 | **PPM** | Parts Per Million. Used to measure clock drift. A 50 PPM drift between two 48kHz clocks means one produces 48000 samples/second while the other produces 48002.4 — a difference of 2.4 frames/second. |
-| **mDNS / Bonjour** | Multicast DNS — a protocol for discovering services on a local network without a central server. Apple's implementation is called Bonjour. Devices announce "I'm here, I offer this service" and others can find them automatically. |
+| **mDNS / Bonjour** | Multicast DNS — a protocol for discovering services on a local network without a central server. Apple's implementation is called Bonjour. Devices announce "I'm here, I offer this service" and others can find them automatically. Zinkos receivers advertise via `_zinkos._udp` and the macOS setup app discovers them automatically. |
 
 ## Why Rust + C++?
 
@@ -139,7 +139,7 @@ A macOS CoreAudio AudioServerPlugIn — the only way to appear as a system audio
 - Receives mixed system audio from CoreAudio as Float32 samples
 - Applies volume (quadratic perceptual curve) and converts to S16LE
 - Hands samples to the Rust engine via FFI
-- Reads config (receiver IP, port) from macOS preferences plist
+- Reads config (receiver IP, port, frames per packet) from macOS preferences plist
 - Persists volume/mute state to survive coreaudiod restarts
 
 **What it explicitly does NOT do:**
@@ -156,28 +156,28 @@ All actual logic. Compiled as a `cdylib` (C-compatible shared library) and calle
 **Components:**
 
 ```
-┌────────────────────────────────────────────────────┐
-│  Rust Engine (runs inside coreaudiod)              │
-│                                                    │
-│  ┌──────────┐   ┌────────────┐   ┌──────────────┐  │
-│  │ Ring     │──▶│ Packetizer │──▶│ UDP Sender   │  │
-│  │ Buffer   │   │            │   │              │  │
-│  │ (SPSC)   │   │ 240 frames │   │ SO_SNDBUF    │  │
-│  │ 4800     │   │ + 16B hdr  │   │ DSCP EF      │  │
-│  │ frames   │   │ = 976B pkt │   │ (QoS marking)│  │
-│  └──────────┘   └────────────┘   └──────────────┘  │
-│       ▲                                            │
-│       │ write_frames() — RT-safe, lock-free        │
-│       │                                            │
-│  ┌─────────────-─┐  ┌─────────────────┐            │
-│  │ State Machine │  │ Drift Estimator │            │
-│  │ (atomic)      │  │ (fill monitor)  │            │
-│  └─────────────-─┘  └─────────────────┘            │
-└──────────────────────────────────────────────────-─┘
+┌──────────────────────────────────────────────────────────┐
+│  Rust Engine (runs inside coreaudiod)                    │
+│                                                          │
+│  ┌──────────┐   ┌──────────────┐   ┌──────────────┐     │
+│  │ Ring     │──▶│ Packetizer   │──▶│ UDP Sender   │     │
+│  │ Buffer   │   │              │   │              │     │
+│  │ (SPSC)   │   │ N frames     │   │ SO_SNDBUF    │     │
+│  │ 4800     │   │ + 20B hdr    │   │ DSCP EF      │     │
+│  │ frames   │   │ (magic+ver)  │   │ (QoS marking)│     │
+│  └──────────┘   └──────────────┘   └──────────────┘     │
+│       ▲                                                  │
+│       │ write_frames() — RT-safe, lock-free              │
+│       │                                                  │
+│  ┌─────────────-─┐  ┌─────────────────┐                  │
+│  │ State Machine │  │ Drift Estimator │                  │
+│  │ (atomic)      │  │ (fill monitor)  │                  │
+│  └─────────────-─┘  └─────────────────┘                  │
+└──────────────────────────────────────────────────────────┘
 ```
 
 - **Ring Buffer** — Lock-free single-producer/single-consumer (`rtrb` crate). The CoreAudio RT thread writes, the network thread reads. Zero contention.
-- **Packetizer** — Reads 240 frames (5ms), prepends a 16-byte header (sequence number, frame count, timestamp), outputs a 976-byte UDP packet.
+- **Packetizer** — Reads N frames (configurable via `FramesPerPacket`, default 240 = 5ms), prepends a 20-byte header (magic, protocol version, flags, sequence number, frame count, timestamp), outputs a UDP packet.
 - **UDP Sender** — Sends packets with DSCP Expedited Forwarding marking for QoS on managed networks. 64KB send buffer.
 - **State Machine** — Atomic state transitions (Stopped/Starting/Running/Stopping). The RT thread checks `is_accepting_audio()` with a single atomic load.
 - **Drift Estimator** — Monitors ring buffer fill level over a sliding window. Computes clock drift in PPM via linear regression. Currently logging-only; could feed a future resampler.
@@ -185,70 +185,92 @@ All actual logic. Compiled as a `cdylib` (C-compatible shared library) and calle
 ## UDP Packet Format
 
 ```
-Bytes 0–3:    seq (u32 LE)         — packet sequence number
-Bytes 4–7:    frames (u32 LE)      — frame count (typically 240)
-Bytes 8–15:   timestamp_ns (u64 LE)— sender clock, for jitter measurement
-Bytes 16–975: PCM data             — 240 frames x 4 bytes = 960 bytes
-                                      interleaved S16_LE [L, R, L, R, ...]
+Bytes 0–1:    magic (u16 LE)       — 0x5A4B ("ZK") — identifies Zinkos packets
+Bytes 2:      version (u8)         — protocol version (currently 1)
+Bytes 3:      flags (u8)           — reserved (0)
+Bytes 4–7:    seq (u32 LE)         — packet sequence number
+Bytes 8–11:   frames (u32 LE)      — frame count in this packet
+Bytes 12–19:  timestamp_ns (u64 LE)— nanoseconds since stream start
+Bytes 20–N:   PCM data             — frames × 4 bytes (interleaved S16_LE [L, R, L, R, ...])
 ─────────────
-Total: 976 bytes (well under 1500-byte MTU — no fragmentation)
+Header: 20 bytes (fixed)
+Payload: frames_per_packet × 4 bytes
+Default (240 frames): 20 + 960 = 980 bytes
+Tuned (100 frames):   20 + 400 = 420 bytes
+All well under 1500-byte MTU — no fragmentation.
 ```
+
+The magic bytes and protocol version enable receivers to detect protocol mismatches. Receivers advertise their supported protocol version via mDNS TXT records, and the macOS setup app shows compatibility status.
 
 ## Receiver (C, ~200 lines)
 
-A standalone C program running on the Thinkpad. Two threads:
+A standalone C program running on the Linux receiver. Two threads:
 
 **Receive thread (RT priority 70):**
 - `recv()` on UDP port 4010
-- Strip 16-byte header
+- Validate 20-byte header (magic bytes, version)
 - Write PCM to lock-free ring buffer
 
 **Playback thread (RT priority 60):**
-1. Wait for ring buffer to fill to 15ms (jitter absorption)
+1. Wait for ring buffer to fill to configured start-fill (default 15ms, tunable)
 2. Pre-fill ALSA buffer
 3. Loop: read from ring buffer → `snd_pcm_writei()` → ALSA → DAC
 4. On underrun: zero-fill + ALSA recovery
 
-**ALSA configuration:**
+**ALSA configuration (configurable via install.sh):**
 ```
-Period size:      240 frames (5ms)
+Period size:      configurable (default 240 frames = 5ms, tuned: 100 frames = ~2ms)
 Periods:          3
-Buffer:           720 frames (15ms)
-Start threshold:  240 frames (1 period = 5ms)
+Buffer:           period × 3 (default 720 = 15ms, tuned: 300 = 6.25ms)
+Start threshold:  period × 2
 Format:           S16_LE, 48kHz, stereo
 ```
 
-Runs as a systemd service (`zinkos-rx.service`) — starts on boot, auto-restarts on failure.
+The receiver reads `frames_per_packet` from the packet header, not from a compile-time constant. This means it adapts automatically when the sender changes its period setting — no receiver restart needed for that change. The ALSA period and start-fill are set during `install.sh` and should match the sender's period for optimal results.
+
+Runs as a systemd service (`zinkos-rx.service`) — starts on boot, auto-restarts on failure. Advertises itself via Avahi/mDNS (`_zinkos._udp`) for automatic discovery by the macOS setup app.
 
 ## Latency Breakdown
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│                    ~25ms end-to-end                       │
-├──────────────────┬──────────┬─────────────────────────────┤
-│   Sender ~13ms   │ Net ~2ms │      Receiver ~10ms         │
-├──────────────────┼──────────┼─────────────────────────────┤
-│ IO buf    10.7ms │ Wi-Fi    │ Jitter fill        15ms     │
-│ Pacer avg  2.5ms │  ~2ms    │ ALSA start          5ms     │
-│ UDP send  <0.1ms │          │ DAC                 1ms     │
-│                  │          │ (jitter+ALSA overlap ~11ms) │
-└──────────────────┴──────────┴─────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│              ~9ms tuned / ~25ms default                       │
+├──────────────────┬──────────┬────────────────────────────────┤
+│   Sender ~5ms    │ Net ~2ms │      Receiver ~3ms (tuned)     │
+├──────────────────┼──────────┼────────────────────────────────┤
+│ IO buf     2.7ms │ Wi-Fi    │ Jitter fill         3ms        │
+│ Pacer avg  2.0ms │  ~2ms    │ DAC                 1ms        │
+│ UDP send  <0.1ms │          │                                │
+└──────────────────┴──────────┴────────────────────────────────┘
 ```
 
 The jitter buffer and ALSA buffer operate concurrently — audio flows from jitter buffer into ALSA continuously, so their latencies partially overlap.
 
-| Stage | Latency | Notes |
-|-------|---------|-------|
-| CoreAudio IO buffer | 10.7ms | 512 frames @ 48kHz. OS-controlled. |
-| Volume + format conversion | <0.01ms | In-place Float32 → S16LE |
-| Ring buffer write | <0.01ms | Lock-free, never blocks |
-| Pacer wait | ~2.5ms avg | 5ms tick, audio waits for next tick |
-| UDP send | <0.1ms | Single syscall, 976 bytes |
-| Wi-Fi (same LAN) | ~2ms | Can spike 10–30ms on congested networks |
-| Receiver jitter buffer | ~15ms | Absorbs Wi-Fi jitter |
-| ALSA playback start | ~5ms | 1 period start threshold |
-| DAC | ~1ms | USB DAC latency |
-| **Total** | **~25ms** | Jitter + ALSA partially overlap |
+| Stage | Default | Tuned | Notes |
+|-------|---------|-------|-------|
+| CoreAudio IO buffer | 2.67ms | 2.67ms | 128 frames @ 48kHz |
+| Volume + format conversion | <0.01ms | <0.01ms | In-place Float32 → S16LE |
+| Ring buffer write | <0.01ms | <0.01ms | Lock-free, never blocks |
+| Pacer wait | ~2.5ms avg | ~1ms avg | Default 5ms tick, tuned ~2ms tick |
+| UDP send | <0.1ms | <0.1ms | Single syscall |
+| Wi-Fi (same LAN) | ~2ms | ~2ms | Can spike on congested networks |
+| Receiver start-fill | 15ms | 3ms | Absorbs Wi-Fi jitter |
+| DAC | ~1ms | ~1ms | USB DAC latency |
+| **Total** | **~25ms** | **~9ms** | |
+
+## Setup App (macOS)
+
+A native SwiftUI app that discovers receivers on the network via Bonjour/mDNS. No manual IP entry needed.
+
+- Discovers `_zinkos._udp` services automatically
+- Shows receiver name, hostname, protocol version compatibility
+- Configures: receiver IP/hostname, port, latency offset, frames per packet (period)
+- Saves to `com.zinkos.driver` plist and restarts coreaudiod
+- Stores mDNS hostnames (e.g. `mypi.local`) so config survives DHCP IP changes
+
+```bash
+cd sender/app && swift build -c release && .build/release/Zinkos
+```
 
 ## Real-Time Safety
 
@@ -270,7 +292,6 @@ zinkos set ip <IP>  # set receiver IP
 zinkos set port <N> # set receiver port
 zinkos rebuild      # compile, validate, install, reload
 zinkos reload       # restart coreaudiod (picks up config changes)
-zinkos install      # symlink to /usr/local/bin
 ```
 
 The rebuild flow includes safety checks: bundle validation, coreaudiod health monitoring (PID + CPU), and auto-rollback if the driver causes a crash loop.
@@ -282,6 +303,7 @@ The rebuild flow includes safety checks: bundle validation, coreaudiod health mo
 | Driver shim | C++ | Required by CoreAudio AudioServerPlugIn API |
 | Engine | Rust | Memory safety, lock-free primitives, testable without macOS |
 | Receiver | C | Minimal dependencies on Linux, direct ALSA access |
+| Setup app | Swift | Native macOS Bonjour discovery, SwiftUI config UI |
 | CLI tool | Bash | No compilation needed, macOS builtins only |
 | Build | CMake + Cargo | CMake for the driver bundle, Cargo for Rust crates |
 
@@ -295,7 +317,7 @@ cargo test    # runs all engine tests
 
 Tests cover:
 - Ring buffer: wrap-around, overrun/underrun, concurrent producer/consumer stress
-- Packetizer: wire format, sequence wrapping, partial packets
+- Packetizer: wire format, sequence wrapping, partial packets, magic/version validation
 - State machine: lifecycle transitions, idempotency, concurrent reads
 - Drift estimator: stable/drifting clock detection
 - UDP sender: localhost round-trip
@@ -326,23 +348,15 @@ Volume state survives coreaudiod restarts (which happen during rebuilds and syst
 
 ### Planned
 
-- **Adaptive jitter buffer** — Start at 15ms, dynamically shrink/grow based on observed network jitter. Best of both worlds: low latency on clean Wi-Fi, resilience when congested.
+- **Adaptive jitter buffer** — Start at configured fill, dynamically shrink/grow based on observed network jitter. Best of both worlds: low latency on clean Wi-Fi, resilience when congested.
 - **Clock drift compensation** — The drift estimator already detects PPM-level clock skew between Mac and receiver. Next step: insert/drop a sample every N frames to stay in sync long-term, eliminating slow underrun drift without large buffers.
 - **Multi-room / multi-receiver** — Send to multiple receivers simultaneously (UDP multicast or multiple unicast). Each receiver independently buffers and plays back. Sync between rooms via shared sequence numbers.
-- **Receiver auto-discovery** — mDNS/Bonjour service advertisement from the receiver. The Mac driver or CLI tool discovers receivers on the network automatically instead of requiring manual IP configuration.
+- **FEC (Forward Error Correction)** — Send redundant packets so the receiver can reconstruct lost ones without retransmission. Adds ~1 packet of latency but eliminates glitches from occasional Wi-Fi packet loss.
 
 ### Exploring
 
-- **macOS Swift app (menu bar)** — Native SwiftUI menu bar app replacing the CLI for day-to-day use. Shows receiver status, volume slider, latency indicator. Manages driver config via the same plist. Could embed a built-in Bonjour browser to pick receivers from a dropdown instead of typing IPs.
-- **Bonjour handshake** — Receivers advertise themselves on the network via mDNS (`_zinkos._udp`). The Mac (driver or Swift app) discovers them automatically. The handshake flow:
-  1. Receiver starts and registers a Bonjour service: `_zinkos._udp.local.` with TXT record containing device name, sample rate, port
-  2. Mac browses for `_zinkos._udp` services via `NSNetServiceBrowser` (Swift app) or `dns-sd` (CLI)
-  3. User picks a receiver — IP and port are resolved automatically
-  4. Driver begins streaming. No manual IP configuration needed.
-  - On the receiver side: Avahi (Linux mDNS) publishes the service. Single config file, no code changes to the receiver binary.
-- **Raspberry Pi 5 as primary receiver** — Currently running on a Thinkpad. The Pi 5 with a USB or I2S DAC is the original target hardware. Needs ALSA tuning for the Pi's USB audio stack.
-- **FEC (Forward Error Correction)** — Send redundant packets so the receiver can reconstruct lost ones without retransmission. Adds ~1 packet of latency but eliminates glitches from occasional Wi-Fi packet loss.
+- **Configurable sample rate** — Support 44.1kHz and 96kHz in addition to 48kHz.
+- **Raspberry Pi 5 as receiver** — The Pi 5 with a USB or I2S DAC. Needs ALSA tuning for the Pi's USB audio stack.
 - **Opus compression** — Optional low-bitrate mode for weaker networks. Opus at 256kbps adds ~5ms encoding latency but reduces bandwidth from ~768kbps to ~256kbps. Would be opt-in; lossless PCM remains the default.
 - **iOS companion app** — iOS doesn't allow system audio capture, but a dedicated app could play audio and simultaneously stream it via UDP to the receiver. Limited to in-app audio only.
-- **ALSA mmap (direct DMA)** — Bypass kernel buffering on the receiver by writing directly to the DMA buffer. Could save ~5ms but significantly more complex.
-- **Smaller IO buffer** — Request 256 frames instead of 512 from CoreAudio. Would halve sender-side buffering latency to ~5.3ms. CoreAudio may or may not honor the request.
+- **ALSA mmap (direct DMA)** — Bypass kernel buffering on the receiver by writing directly to the DMA buffer. Could save a few ms but significantly more complex.

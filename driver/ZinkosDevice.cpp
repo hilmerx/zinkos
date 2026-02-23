@@ -286,7 +286,7 @@ static OSStatus GetDeviceProperty(AudioObjectPropertySelector sel, const AudioOb
             return WriteUInt32(outData, outDataSize, 0);
         case kAudioDevicePropertyZeroTimeStampPeriod:
             // Must match the period used in GetZeroTimeStamp and buffer frame size
-            return WriteUInt32(outData, outDataSize, 512);
+            return WriteUInt32(outData, outDataSize, 128);
         case kAudioDevicePropertyIsHidden:
             return WriteUInt32(outData, outDataSize, 0); // visible in Sound preferences
         case kAudioDevicePropertyPreferredChannelsForStereo: {
@@ -296,7 +296,7 @@ static OSStatus GetDeviceProperty(AudioObjectPropertySelector sel, const AudioOb
             return kAudioHardwareNoError;
         }
         case 'fsiz':
-            return WriteUInt32(outData, outDataSize, 512); // default IO buffer size
+            return WriteUInt32(outData, outDataSize, 128); // ~2.7ms at 48kHz
         case 'fsrn': {
             AudioValueRange range = { kZinkos_MinBufferFrames, kZinkos_MaxBufferFrames };
             memcpy(outData, &range, sizeof(range));

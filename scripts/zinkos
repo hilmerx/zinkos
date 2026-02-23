@@ -17,7 +17,6 @@ GREEN='\033[38;5;107m'
 # ── Constants ───────────────────────────────────────────────
 PLIST_PATH="/Library/Preferences/com.zinkos.driver"
 DRIVER_PATH="/Library/Audio/Plug-Ins/HAL/Zinkos.driver"
-SYMLINK_PATH="/usr/local/bin/zinkos"
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 # Follow symlink to real location
 if [ -L "$SCRIPT_PATH" ]; then
@@ -40,10 +39,17 @@ fi
 # ── Helpers ─────────────────────────────────────────────────
 
 print_logo() {
+    local ver="v${VERSION}"
+    local content="     Wi-Fi Audio Streaming  ${ver}"
+    local width=35  # inner width between ║ and ║
+    local pad=$(( width - ${#content} ))
+    local spaces=""
+    for (( i=0; i<pad; i++ )); do spaces+=" "; done
+
     echo -e "${BOLD}${AMBER}"
     echo '  ╔═══════════════════════════════════╗'
     echo '  ║         Z I N K O S               ║'
-    echo -e "  ║     Wi-Fi Audio Streaming  ${DIM}v${VERSION}${BOLD}${AMBER}  ║"
+    echo -e "  ║${content}${DIM}${spaces}${BOLD}${AMBER}║"
     echo '  ╚═══════════════════════════════════╝'
     echo -e "${RESET}"
 }
@@ -167,25 +173,9 @@ cmd_reload() {
     fi
 }
 
-cmd_install() {
-    info "Installing zinkos to $SYMLINK_PATH..."
-    sudo ln -sf "$SCRIPT_PATH" "$SYMLINK_PATH"
-    success "Installed. Run ${BOLD}zinkos${RESET} from anywhere."
-}
-
 cmd_rebuild() {
     info "Rebuilding and reloading driver..."
     "$REPO_DIR/scripts/reload.sh" "${REPO_DIR}/build"
-}
-
-cmd_uninstall() {
-    if [ ! -L "$SYMLINK_PATH" ]; then
-        info "No symlink at $SYMLINK_PATH — nothing to remove."
-        return
-    fi
-    info "Removing $SYMLINK_PATH..."
-    sudo rm -f "$SYMLINK_PATH"
-    success "Uninstalled. Symlink removed."
 }
 
 cmd_version() {
@@ -203,8 +193,6 @@ cmd_help() {
     echo -e "    ${BROWN}set latency${RESET} <MS>    Set latency offset (ms)"
     echo -e "    ${BROWN}rebuild${RESET}             Build, validate, install, and reload driver"
     echo -e "    ${BROWN}reload${RESET}              Restart coreaudiod to apply changes"
-    echo -e "    ${BROWN}install${RESET}             Symlink to /usr/local/bin for global access"
-    echo -e "    ${BROWN}uninstall${RESET}           Remove the global symlink"
     echo -e "    ${BROWN}version${RESET}             Show version"
     echo -e "    ${BROWN}help${RESET}                Show this help"
     echo ""
@@ -228,12 +216,6 @@ case "${1:-}" in
         ;;
     reload)
         cmd_reload
-        ;;
-    install)
-        cmd_install
-        ;;
-    uninstall)
-        cmd_uninstall
         ;;
     version|--version|-V)
         cmd_version

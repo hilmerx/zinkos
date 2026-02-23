@@ -6,7 +6,7 @@
 
 <p align="center">
   macOS CoreAudio driver + Linux receiver<br>
-  ~25ms end-to-end (and improving) &bull; Lossless PCM &bull; UDP
+  ~9ms end-to-end (with tuning) &bull; Lossless PCM &bull; UDP
 </p>
 
 ---
@@ -53,13 +53,13 @@ Zinkos appears as a native sound output in macOS — just select it like you wou
 
 | | Latency | Quality | Hardware | Downsides |
 |---|---|---|---|---|
-| **Zinkos** | **~25ms (and improving)** | **Lossless PCM** | **Standard Wi-Fi** | **Requires manual setup** |
+| **Zinkos** | **~9ms (tuned) / ~25ms (default)** | **Lossless PCM** | **Standard Wi-Fi** | **Requires manual setup** |
 | AirPlay 2 | ~2000ms | Lossless | Apple ecosystem | Unusable latency for video, Apple-only, no Linux receivers |
 | Bluetooth A2DP | ~150ms | Lossy | BT adapter on both ends | Compressed audio, short range, pairs with one device |
 | Snapcast | ~30–50ms | Lossless | Standard Wi-Fi | No native macOS output — requires piping audio manually |
 | Dante (pro AV) | ~2ms | Lossless | Dedicated hardware both ends | Expensive licensing, proprietary hardware, not consumer-grade |
 
-Zinkos sits between consumer wireless and pro AV gear — no special hardware or licensing needed. Current ~25ms latency will improve further with planned enhancements like adaptive jitter buffering and clock drift compensation.
+Zinkos sits between consumer wireless and pro AV gear — no special hardware or licensing needed. Default settings give ~25ms with comfortable margins; tuning the packet period and receiver buffer down gets you to ~8ms on a good network.
 
 ## Installation
 
@@ -89,8 +89,6 @@ mkdir build && cd build && cmake .. && cd ..
 # Build, validate, install, and reload the driver
 ./scripts/zinkos rebuild
 
-# Install the CLI tool system-wide
-./scripts/zinkos install
 ```
 
 **Option A — Setup app (recommended):**
@@ -120,7 +118,7 @@ cd zinkos/receiver/c
 ./install.sh
 ```
 
-The installer lists your ALSA devices and lets you pick one:
+The installer lists your ALSA devices and lets you pick one, then asks for latency tuning:
 
 ```
 Available audio devices:
@@ -128,7 +126,11 @@ Available audio devices:
   1) hw:0,0  —  bcm2835 Headphones [bcm2835 Headphones]
   2) hw:1,0  —  USB Audio [USB Audio]
 
-Select device [1-2]:
+Select device [1-2]: 2
+
+Latency tuning (press Enter for defaults):
+  Start-fill buffer in ms [15]:
+  ALSA period in frames [240]:
 ```
 
 ## Setup App
@@ -151,7 +153,6 @@ zinkos set ip <IP>  # set receiver IP (or hostname like mypi.local)
 zinkos set port <N> # set receiver port
 zinkos rebuild      # compile, validate, install, reload
 zinkos reload       # restart coreaudiod
-zinkos install      # symlink to /usr/local/bin
 ```
 
 ## Architecture
@@ -170,13 +171,36 @@ The engine is 100% testable without CoreAudio:
 cargo test
 ```
 
+## Latency Tuning
+
+Two settings control end-to-end latency:
+
+| Setting | Where | Default | Low-latency |
+|---|---|---|---|
+| **Period** (frames per packet) | Setup app or plist | 240 (~5ms) | 100 (~2ms) |
+| **Start-fill** (receiver buffer) | `install.sh` on receiver | 15ms | 3ms |
+
+**Default settings (~25ms):** 240-frame period, 15ms start-fill. Rock-solid on any network.
+
+**Tuned settings (~8ms):** 100-frame period, 3ms start-fill. Requires good Wi-Fi with low jitter.
+
+The period is set in the macOS setup app (Period field) and takes effect on Save & Reload — no driver rebuild needed. The receiver's start-fill and ALSA period are set during `install.sh` and should match the sender's period for best results.
+
+| Stage | Default | Tuned |
+|---|---|---|
+| CoreAudio IO buffer | ~2.7ms (128 frames) | ~2.7ms (128 frames) |
+| Sender pacing | ~5ms | ~2ms |
+| Network (Wi-Fi UDP) | ~1-2ms | ~1-2ms |
+| Receiver start-fill | 15ms | 3ms |
+| **Total** | **~25ms** | **~9ms** |
+
 ## Audio Format
 
 Fixed across the entire pipeline — no negotiation, no codecs:
 
 - **48,000 Hz** stereo
 - **S16_LE** (16-bit signed little-endian PCM)
-- **976-byte** UDP packets (16B header + 960B PCM)
+- **20-byte header** + PCM payload per UDP packet (size depends on period setting)
 - **UDP port 4010** default (configurable via `zinkos set port <N>`)
 
 ## Roadmap
@@ -186,6 +210,7 @@ Fixed across the entire pipeline — no negotiation, no codecs:
 - Clock drift compensation (sample insertion/dropping)
 - ~~Bonjour/mDNS auto-discovery (no manual IP config)~~ Done
 - ~~macOS Swift setup app~~ Done
+- ~~Configurable packet period and receiver buffering~~ Done (~9ms achievable)
 - Multi-room / multi-receiver support
 - Forward error correction (FEC) for lossy networks
 - Pre-built signed installer (no Xcode or developer certificate needed)

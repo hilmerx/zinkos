@@ -14,9 +14,9 @@
 #define kZinkos_BitsPerChannel  32
 
 // Latency (in frames)
-#define kZinkos_DeviceLatency   480     // ~10ms at 48kHz
-#define kZinkos_StreamLatency   240     // ~5ms (one packet)
-#define kZinkos_SafetyOffset    240     // ~5ms
+#define kZinkos_DeviceLatency   128     // ~2.7ms at 48kHz
+#define kZinkos_StreamLatency   128     // ~2.7ms
+#define kZinkos_SafetyOffset    64      // ~1.3ms
 
 // IO buffer size range (in frames)
 #define kZinkos_MinBufferFrames 128

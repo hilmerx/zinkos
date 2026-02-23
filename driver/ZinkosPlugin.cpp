@@ -402,7 +402,7 @@ static OSStatus ZinkosGetZeroTimeStamp(AudioServerPlugInDriverRef /*inDriver*/, 
     UInt64 elapsedFrames = elapsed / gDriverState.ticksPerFrame;
 
     // Round down to the nearest zero-timestamp period boundary
-    const UInt64 ztsPeriod = 512;
+    const UInt64 ztsPeriod = 128;
     UInt64 cycleCount = elapsedFrames / ztsPeriod;
 
     *outSampleTime = (Float64)(cycleCount * ztsPeriod);
