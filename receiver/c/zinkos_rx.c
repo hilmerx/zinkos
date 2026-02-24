@@ -121,6 +121,7 @@ int main(int argc, char **argv) {
   const char *alsa_dev = (argc > 1) ? argv[1] : "hw:0,0";
   uint32_t start_fill_ms = DEFAULT_START_FILL_MS;
   uint32_t period_frames = 240;
+  uint16_t port = PORT;
   if (argc > 2) {
     int val = atoi(argv[2]);
     if (val > 0 && val <= 500) start_fill_ms = (uint32_t)val;
@@ -130,6 +131,11 @@ int main(int argc, char **argv) {
     int val = atoi(argv[3]);
     if (val >= 48 && val <= 4800) period_frames = (uint32_t)val;
     else fprintf(stderr, "Ignoring invalid period %s frames (valid: 48–4800)\n", argv[3]);
+  }
+  if (argc > 4) {
+    int val = atoi(argv[4]);
+    if (val > 0 && val <= 65535) port = (uint16_t)val;
+    else fprintf(stderr, "Ignoring invalid port %s (valid: 1–65535)\n", argv[4]);
   }
 
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -142,7 +148,7 @@ int main(int argc, char **argv) {
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons(PORT);
+  addr.sin_port = htons(port);
 
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     perror("bind");
@@ -204,8 +210,8 @@ int main(int argc, char **argv) {
   uint8_t out[1024 * FRAME_BYTES];
 
   const uint32_t start_fill_frames = (start_fill_ms * SAMPLE_RATE) / 1000;
-  fprintf(stderr, "Zinkos RX UDP :%d @ %uHz, ALSA %s, start fill ~%ums (%u frames)\n",
-          PORT, rate, alsa_dev, start_fill_ms, start_fill_frames);
+  fprintf(stderr, "Zinkos RX UDP :%u @ %uHz, ALSA %s, start fill ~%ums (%u frames)\n",
+          port, rate, alsa_dev, start_fill_ms, start_fill_frames);
 
   // Wait for ring buffer to accumulate enough
   while (rb_used_frames() < start_fill_frames) {

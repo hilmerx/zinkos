@@ -218,7 +218,7 @@ A standalone C program running on the Linux receiver. Two threads:
 3. Loop: read from ring buffer → `snd_pcm_writei()` → ALSA → DAC
 4. On underrun: zero-fill + ALSA recovery
 
-**ALSA configuration (configurable via install-rx.sh):**
+**ALSA configuration (configurable via zinkos-rx):**
 ```
 Period size:      configurable (default 240 frames = 5ms, tuned: 100 frames = ~2ms)
 Periods:          3
@@ -227,7 +227,7 @@ Start threshold:  period × 2
 Format:           S16_LE, 48kHz, stereo
 ```
 
-The receiver reads `frames_per_packet` from the packet header, not from a compile-time constant. This means it adapts automatically when the sender changes its frame size setting — no receiver restart needed for that change. The ALSA period and start-fill are set during `install-rx.sh` and should match the sender's frame size for optimal results.
+The receiver reads `frames_per_packet` from the packet header, not from a compile-time constant. This means it adapts automatically when the sender changes its frame size setting — no receiver restart needed for that change. The ALSA period and start-fill are set during `zinkos-rx` and should match the sender's frame size for optimal results.
 
 Runs as a systemd service (`zinkos-rx.service`) — starts on boot, auto-restarts on failure. Advertises itself via Avahi/mDNS (`_zinkos._udp`) for automatic discovery by the macOS setup app.
 

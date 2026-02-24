@@ -201,7 +201,7 @@ struct MenuView: View {
                         .font(.system(size: 14))
                         .onTapGesture { showFrameSizeInfo.toggle() }
                         .popover(isPresented: $showFrameSizeInfo, arrowEdge: .trailing) {
-                            Text("Frame size should also be configured on the receiver. Re-run install-rx.sh to match.")
+                            Text("Frame size should also be configured on the receiver. Re-run zinkos-rx config to match.")
                                 .font(.callout)
                                 .foregroundColor(.black)
                                 .padding(12)

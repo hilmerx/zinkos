@@ -41,8 +41,8 @@ CoreAudio IO buffer → DoIOOperation (Float32→S16LE) → Ring buffer
 | Stage | Latency | Fixed? | Notes |
 |-------|---------|--------|-------|
 | UDP recv → jitter buffer push | <0.1ms | Yes | Separate recv_thread with RT priority |
-| **Jitter buffer start-fill** | **configurable** | **Tunable** | Set via `install-rx.sh` (argv[2]). Must absorb Wi-Fi jitter. See tuning section. |
-| **ALSA buffer** | **configurable** | **Tunable** | `period_size × 3` periods. Set via `install-rx.sh` (argv[3]). See tuning section. |
+| **Jitter buffer start-fill** | **configurable** | **Tunable** | Set via `zinkos-rx` (argv[2]). Must absorb Wi-Fi jitter. See tuning section. |
+| **ALSA buffer** | **configurable** | **Tunable** | `period_size × 3` periods. Set via `zinkos-rx` (argv[3]). See tuning section. |
 | ALSA start_threshold | configurable | Tunable | Controls when hardware begins DMA. `= period_size` is lowest safe value. |
 | DAC | ~1ms | Yes (hardware) | USB DAC adds ~1ms, I2S negligible |
 
@@ -70,7 +70,7 @@ total = IO_buffer + pacer_phase + network + jitter_fill + DAC
 
 ### Jitter Buffer Start-Fill
 
-How much audio to accumulate before starting playback. Must absorb Wi-Fi jitter. Set during `install-rx.sh` or passed as argv[2] to the receiver binary.
+How much audio to accumulate before starting playback. Must absorb Wi-Fi jitter. Set during `zinkos-rx` or passed as argv[2] to the receiver binary.
 
 | Value | Behavior |
 |-------|----------|
@@ -81,7 +81,7 @@ How much audio to accumulate before starting playback. Must absorb Wi-Fi jitter.
 
 ### ALSA Period Size
 
-The ALSA period controls how many frames are written to hardware at a time. Set during `install-rx.sh` or passed as argv[3] to the receiver binary. Should generally match the sender's frame size for best results.
+The ALSA period controls how many frames are written to hardware at a time. Set during `zinkos-rx` or passed as argv[3] to the receiver binary. Should generally match the sender's frame size for best results.
 
 | Period | Duration at 48kHz | Buffer (×3) | Behavior |
 |--------|-------------------|-------------|----------|

@@ -27,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.appearance = NSAppearance(named: .aqua)
 
         // Set logo as dock/Cmd+Tab icon with rounded corners
         if let logoURL = Bundle.module.url(forResource: "logo", withExtension: "png", subdirectory: "Resources"),
@@ -59,6 +60,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if let window = NSApplication.shared.windows.first {
                 let version = Self.appVersion
                 window.title = "ZINKOS v\(version)"
+                window.appearance = NSAppearance(named: .aqua)
+                window.titlebarAppearsTransparent = true
+                window.backgroundColor = .white
                 window.center()
                 window.makeKeyAndOrderFront(nil)
             }

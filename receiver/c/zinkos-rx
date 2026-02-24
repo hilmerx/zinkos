@@ -1,0 +1,329 @@
+#!/bin/bash
+#
+# zinkos-rx — install, configure, and manage the Zinkos receiver
+#
+# First run:  builds, picks ALSA device, installs systemd service
+# After that: shows current config, lets you change settings, restarts
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Follow symlink to real location
+if [ -L "$0" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$(readlink "$0")")" && pwd)"
+fi
+
+SERVICE="zinkos-rx"
+SERVICE_FILE="/etc/systemd/system/${SERVICE}.service"
+AVAHI_FILE="/etc/avahi/services/zinkos.service"
+
+BOLD='\033[1m'
+DIM='\033[2m'
+AMBER='\033[38;5;172m'
+GREEN='\033[38;5;107m'
+RED='\033[38;5;160m'
+RESET='\033[0m'
+
+# ── Helpers ────────────────────────────────────────────────
+
+info()    { echo -e "  ${AMBER}▸${RESET} $1"; }
+success() { echo -e "  ${GREEN}✓${RESET} $1"; }
+error()   { echo -e "  ${RED}✗${RESET} $1" >&2; }
+
+print_header() {
+    echo -e "${BOLD}${AMBER}"
+    echo '  ╔═══════════════════════════════════╗'
+    echo '  ║       Z I N K O S   R X           ║'
+    echo '  ╚═══════════════════════════════════╝'
+    echo -e "${RESET}"
+}
+
+validate_int() {
+    local val="$1" min="$2" max="$3" default="$4" label="$5"
+    if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt "$min" ] || [ "$val" -gt "$max" ]; then
+        echo -e "  ${RED}Invalid ${label}, using ${default}${RESET}" >&2
+        echo "$default"
+    else
+        echo "$val"
+    fi
+}
+
+# ── Parse current config from service file ─────────────────
+
+parse_current() {
+    local exec_line
+    exec_line=$(grep '^ExecStart=' "$SERVICE_FILE" | sed 's/^ExecStart=//')
+
+    CUR_DEVICE=$(echo "$exec_line" | awk '{print $2}')
+    CUR_FILL=$(echo "$exec_line" | awk '{print $3}')
+    CUR_PERIOD=$(echo "$exec_line" | awk '{print $4}')
+    CUR_PORT=$(echo "$exec_line" | awk '{print $5}')
+
+    CUR_DEVICE="${CUR_DEVICE:-hw:0,0}"
+    CUR_FILL="${CUR_FILL:-15}"
+    CUR_PERIOD="${CUR_PERIOD:-240}"
+    CUR_PORT="${CUR_PORT:-4010}"
+}
+
+show_status() {
+    local status
+    if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+        status="${GREEN}running${RESET}"
+    else
+        status="${RED}stopped${RESET}"
+    fi
+
+    local period_ms=$(( CUR_PERIOD * 1000 / 48000 ))
+    local buffer_ms=$(( period_ms * 3 ))
+
+    echo -e "  Service: ${status}"
+    echo ""
+    echo -e "  ${BOLD}Current settings:${RESET}"
+    echo -e "    ALSA device     ${BOLD}${CUR_DEVICE}${RESET}"
+    echo -e "    Start-fill       ${BOLD}${CUR_FILL}${RESET} ms"
+    echo -e "    Frame size       ${BOLD}${CUR_PERIOD}${RESET} frames (~${period_ms} ms, buffer ~${buffer_ms} ms)"
+    echo -e "    UDP port         ${BOLD}${CUR_PORT}${RESET}"
+    echo ""
+}
+
+# ── Check dependencies ─────────────────────────────────────
+
+check_deps() {
+    local missing=()
+    command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || missing+=("C compiler (gcc)")
+    [ -f /usr/include/alsa/asoundlib.h ] || missing+=("ALSA dev headers (libasound2-dev or alsa-lib)")
+    if [ ${#missing[@]} -gt 0 ]; then
+        error "Missing dependencies:"
+        for dep in "${missing[@]}"; do
+            echo "    - $dep"
+        done
+        echo ""
+        echo "  Arch:   sudo pacman -S base-devel alsa-lib"
+        echo "  Debian: sudo apt install build-essential libasound2-dev"
+        exit 1
+    fi
+}
+
+# ── Pick ALSA device ───────────────────────────────────────
+
+pick_alsa_device() {
+    local default_dev="${1:-}"
+
+    echo "  Available audio devices:"
+    echo ""
+
+    devices=()
+    descriptions=()
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^card\ ([0-9]+):.+device\ ([0-9]+):\ (.+) ]]; then
+            card="${BASH_REMATCH[1]}"
+            dev="${BASH_REMATCH[2]}"
+            desc="${BASH_REMATCH[3]}"
+            hw="hw:${card},${dev}"
+            devices+=("$hw")
+            descriptions+=("$desc")
+            local marker=""
+            if [ "$hw" = "$default_dev" ]; then
+                marker=" ${GREEN}(current)${RESET}"
+            fi
+            echo -e "    ${#devices[@]}) ${hw}  —  ${desc}${marker}"
+        fi
+    done < <(aplay -l 2>/dev/null)
+
+    if [ ${#devices[@]} -eq 0 ]; then
+        error "No ALSA playback devices found!"
+        echo "  Check that your DAC/speakers are connected."
+        exit 1
+    fi
+
+    echo ""
+    local prompt="  Select device [1-${#devices[@]}]"
+    if [ -n "$default_dev" ]; then
+        prompt="${prompt} (Enter = keep ${default_dev})"
+    fi
+    read -rp "${prompt}: " choice
+
+    if [ -z "$choice" ] && [ -n "$default_dev" ]; then
+        SELECTED_DEVICE="$default_dev"
+        return
+    fi
+
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#devices[@]} ]; then
+        error "Invalid selection."
+        exit 1
+    fi
+
+    SELECTED_DEVICE="${devices[$((choice - 1))]}"
+}
+
+# ── Prompt for tuning settings ─────────────────────────────
+
+prompt_settings() {
+    local def_fill="${1:-15}" def_period="${2:-240}" def_port="${3:-4010}"
+
+    echo ""
+    echo -e "  ${BOLD}Latency tuning${RESET} ${DIM}(Enter = keep current)${RESET}"
+
+    read -rp "  Start-fill ms [$def_fill]: " fill_ms
+    fill_ms=$(validate_int "${fill_ms:-$def_fill}" 1 500 "$def_fill" "start-fill")
+
+    read -rp "  Frame size in frames [$def_period]: " period
+    period=$(validate_int "${period:-$def_period}" 48 4800 "$def_period" "frame size")
+
+    read -rp "  UDP port [$def_port]: " rx_port
+    rx_port=$(validate_int "${rx_port:-$def_port}" 1 65535 "$def_port" "port")
+
+    NEW_FILL="$fill_ms"
+    NEW_PERIOD="$period"
+    NEW_PORT="$rx_port"
+}
+
+# ── Apply settings ─────────────────────────────────────────
+
+apply_settings() {
+    local device="$1" fill="$2" period="$3" port="$4"
+
+    local period_ms=$(( period * 1000 / 48000 ))
+    local buffer_ms=$(( period_ms * 3 ))
+    echo ""
+    echo -e "  ${BOLD}Applying:${RESET} ${device}, fill=${fill}ms, period=${period} (~${period_ms}ms), buffer ~${buffer_ms}ms, port=${port}"
+    echo ""
+
+    local svc_user
+    if [ -f "$SERVICE_FILE" ]; then
+        svc_user=$(grep '^User=' "$SERVICE_FILE" | sed 's/^User=//')
+    fi
+    svc_user="${svc_user:-$(whoami)}"
+
+    sudo make -C "$SCRIPT_DIR" install-service \
+        ALSA_DEVICE="$device" \
+        START_FILL_MS="$fill" \
+        ALSA_PERIOD="$period" \
+        PORT="$port" \
+        SERVICE_USER="$svc_user"
+
+    if command -v avahi-daemon >/dev/null 2>&1; then
+        sudo make -C "$SCRIPT_DIR" install-avahi \
+            START_FILL_MS="$fill" \
+            ALSA_PERIOD="$period" \
+            PORT="$port"
+        success "Avahi mDNS updated"
+    fi
+
+    success "Service restarted"
+}
+
+# ── Commands ───────────────────────────────────────────────
+
+cmd_install() {
+    check_deps
+
+    info "Building zinkos_rx..."
+    make -C "$SCRIPT_DIR" clean
+    make -C "$SCRIPT_DIR"
+    echo ""
+
+    pick_alsa_device ""
+    echo ""
+    echo -e "  Selected: ${BOLD}${SELECTED_DEVICE}${RESET}"
+
+    prompt_settings 15 240 4010
+    apply_settings "$SELECTED_DEVICE" "$NEW_FILL" "$NEW_PERIOD" "$NEW_PORT"
+
+    if ! command -v avahi-daemon >/dev/null 2>&1; then
+        echo ""
+        echo -e "  ${DIM}Note: avahi-daemon not found — mDNS discovery won't work.${RESET}"
+        echo -e "  ${DIM}Install for auto-discovery: sudo apt install avahi-daemon${RESET}"
+    fi
+
+    echo ""
+    success "Zinkos receiver installed"
+    echo ""
+    echo -e "  ${DIM}Reconfigure anytime:  zinkos-rx config${RESET}"
+    echo -e "  ${DIM}Check logs:           journalctl -u zinkos-rx -f${RESET}"
+}
+
+cmd_config() {
+    if [ ! -f "$SERVICE_FILE" ]; then
+        error "Service not installed. Run: zinkos-rx install"
+        exit 1
+    fi
+
+    parse_current
+    show_status
+
+    pick_alsa_device "$CUR_DEVICE"
+    prompt_settings "$CUR_FILL" "$CUR_PERIOD" "$CUR_PORT"
+
+    if [ "$SELECTED_DEVICE" = "$CUR_DEVICE" ] && [ "$NEW_FILL" = "$CUR_FILL" ] && \
+       [ "$NEW_PERIOD" = "$CUR_PERIOD" ] && [ "$NEW_PORT" = "$CUR_PORT" ]; then
+        echo ""
+        echo -e "  ${DIM}No changes.${RESET}"
+        return
+    fi
+
+    apply_settings "$SELECTED_DEVICE" "$NEW_FILL" "$NEW_PERIOD" "$NEW_PORT"
+}
+
+cmd_status() {
+    if [ ! -f "$SERVICE_FILE" ]; then
+        error "Service not installed. Run: zinkos-rx install"
+        exit 1
+    fi
+
+    parse_current
+    print_header
+    show_status
+}
+
+cmd_logs() {
+    journalctl -u "$SERVICE" -f
+}
+
+cmd_help() {
+    print_header
+    echo -e "  ${BOLD}${AMBER}Usage:${RESET}  zinkos-rx <command>"
+    echo ""
+    echo -e "  ${BOLD}${AMBER}Commands:${RESET}"
+    echo -e "    ${AMBER}install${RESET}    Build and install (first-time setup)"
+    echo -e "    ${AMBER}config${RESET}     Change settings and restart service"
+    echo -e "    ${AMBER}status${RESET}     Show current config and service status"
+    echo -e "    ${AMBER}logs${RESET}       Follow service logs"
+    echo -e "    ${AMBER}help${RESET}       Show this help"
+    echo ""
+}
+
+# ── Main ───────────────────────────────────────────────────
+
+print_header
+
+case "${1:-}" in
+    install)
+        cmd_install
+        ;;
+    config)
+        cmd_config
+        ;;
+    status)
+        cmd_status
+        ;;
+    logs)
+        cmd_logs
+        ;;
+    help|--help|-h)
+        cmd_help
+        ;;
+    "")
+        # Smart default: install if not yet installed, config if already installed
+        if [ -f "$SERVICE_FILE" ]; then
+            cmd_config
+        else
+            cmd_install
+        fi
+        ;;
+    *)
+        error "Unknown command: $1"
+        echo -e "  ${DIM}Run: zinkos-rx help${RESET}"
+        exit 1
+        ;;
+esac

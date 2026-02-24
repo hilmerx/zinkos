@@ -115,7 +115,7 @@ git clone https://github.com/hilmerx/zinkos.git
 cd zinkos/receiver/c
 
 # Interactive installer — builds, lists audio devices, installs service
-./install-rx.sh
+./zinkos-rx
 ```
 
 The installer lists your ALSA devices and lets you pick one, then asks for latency tuning:
@@ -182,13 +182,13 @@ Two settings control end-to-end latency:
 | Setting | Where | Default | Low-latency |
 |---|---|---|---|
 | **Frame size** (frames per packet) | Setup app or plist | 240 (~5ms) | 100 (~2ms) |
-| **Start-fill** (receiver buffer) | `install-rx.sh` on receiver | 15ms | 3ms |
+| **Start-fill** (receiver buffer) | `zinkos-rx` on receiver | 15ms | 3ms |
 
 **Default settings (~25ms):** 240 frame size, 15ms start-fill. Rock-solid on any network.
 
 **Tuned settings (~8ms):** 100 frame size, 3ms start-fill. Requires good Wi-Fi with low jitter.
 
-The frame size is set in the macOS setup app and takes effect on Save & Reload — no driver rebuild needed. The receiver's start-fill and ALSA period are set during `install-rx.sh` and should match the sender's frame size for best results.
+The frame size is set in the macOS setup app and takes effect on Save & Reload — no driver rebuild needed. The receiver's start-fill and ALSA period are set during `zinkos-rx` and should match the sender's frame size for best results.
 
 | Stage | Default | Tuned |
 |---|---|---|
