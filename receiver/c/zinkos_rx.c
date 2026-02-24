@@ -251,9 +251,6 @@ int main(int argc, char **argv) {
         break;
       }
     }
-    uint32_t fill = rb_used_frames();
-    if (fill < 200)
-        fprintf(stderr, "LOW: %u frames\n", fill);
   }
 
   running = 0;
