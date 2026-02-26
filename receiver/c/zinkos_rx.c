@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -9,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <alsa/asoundlib.h>
@@ -75,6 +78,74 @@ static uint32_t rb_read_frames(uint8_t *dst, uint32_t frames) {
   return frames;
 }
 
+/* --- Config & status --- */
+#define CONFIG_PATH       "/etc/zinkos/config"
+#define DEFAULT_STATUS_PATH "/run/zinkos/status"
+#define DEFAULT_IDLE_TIMEOUT 5
+
+static struct {
+  int idle_timeout_s;
+  char status_path[256];
+} cfg = {
+  .idle_timeout_s = DEFAULT_IDLE_TIMEOUT,
+  .status_path    = DEFAULT_STATUS_PATH,
+};
+
+static void parse_config(void) {
+  FILE *f = fopen(CONFIG_PATH, "r");
+  if (!f) return;  /* missing config is fine — use defaults */
+
+  char line[512];
+  while (fgets(line, sizeof(line), f)) {
+    /* strip newline */
+    line[strcspn(line, "\n")] = '\0';
+
+    /* skip comments and blank lines */
+    if (line[0] == '#' || line[0] == '\0') continue;
+
+    char *eq = strchr(line, '=');
+    if (!eq) continue;
+    *eq = '\0';
+    const char *key = line;
+    const char *val = eq + 1;
+
+    if (strcmp(key, "idle_timeout_s") == 0) {
+      int v = atoi(val);
+      if (v > 0) cfg.idle_timeout_s = v;
+    } else if (strcmp(key, "status_path") == 0) {
+      if (val[0] == '/')
+        snprintf(cfg.status_path, sizeof(cfg.status_path), "%s", val);
+    }
+    /* unknown keys silently ignored */
+  }
+  fclose(f);
+}
+
+static void write_status(const char *status) {
+  char tmp[280];
+  snprintf(tmp, sizeof(tmp), "%s.tmp", cfg.status_path);
+
+  int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return;
+
+  size_t len = strlen(status);
+  write(fd, status, len);
+  write(fd, "\n", 1);
+  close(fd);
+  rename(tmp, cfg.status_path);
+}
+
+static void ensure_status_dir(void) {
+  /* extract directory from status_path */
+  char dir[256];
+  snprintf(dir, sizeof(dir), "%s", cfg.status_path);
+  char *slash = strrchr(dir, '/');
+  if (slash) {
+    *slash = '\0';
+    mkdir(dir, 0755);  /* ignore error — may already exist */
+  }
+}
+
 static void set_thread_realtime(int priority) {
   struct sched_param sp;
   memset(&sp, 0, sizeof(sp));
@@ -137,6 +208,12 @@ int main(int argc, char **argv) {
     if (val > 0 && val <= 65535) port = (uint16_t)val;
     else fprintf(stderr, "Ignoring invalid port %s (valid: 1–65535)\n", argv[4]);
   }
+
+  parse_config();
+  ensure_status_dir();
+  write_status("idle");
+  fprintf(stderr, "Config: idle_timeout_s=%d status_path=%s\n",
+          cfg.idle_timeout_s, cfg.status_path);
 
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) { perror("socket"); return 1; }
@@ -236,11 +313,39 @@ int main(int argc, char **argv) {
 
   // Start playback
   snd_pcm_start(pcm);
+  write_status("playing");
+
+  int is_playing = 1;
+  struct timespec last_data_ts;
+  clock_gettime(CLOCK_MONOTONIC, &last_data_ts);
 
   while (running) {
     uint32_t got = rb_read_frames(out, (uint32_t)actual_period);
     if (got < actual_period)
       memset(out + got * FRAME_BYTES, 0, (actual_period - got) * FRAME_BYTES);
+
+    /* Check if audio is non-silent */
+    int has_audio = 0;
+    if (got > 0) {
+      const int16_t *samples = (const int16_t *)out;
+      for (uint32_t i = 0; i < got * CHANNELS; i++) {
+        if (samples[i] != 0) { has_audio = 1; break; }
+      }
+    }
+
+    /* Track idle/playing transitions using wall clock */
+    if (has_audio) {
+      clock_gettime(CLOCK_MONOTONIC, &last_data_ts);
+      if (!is_playing) { write_status("playing"); is_playing = 1; }
+    } else if (is_playing) {
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      long elapsed_s = now.tv_sec - last_data_ts.tv_sec;
+      if (elapsed_s >= cfg.idle_timeout_s) {
+        write_status("idle");
+        is_playing = 0;
+      }
+    }
 
     snd_pcm_sframes_t w = snd_pcm_writei(pcm, out, actual_period);
     if (w < 0) {
@@ -254,6 +359,7 @@ int main(int argc, char **argv) {
   }
 
   running = 0;
+  write_status("idle");
   pthread_join(rthr, NULL);
   snd_pcm_close(pcm);
   close(fd);
