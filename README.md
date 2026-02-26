@@ -29,6 +29,7 @@ Zinkos appears as a native sound output in macOS — just select it like you wou
 - **Low latency** — fast enough for video, casual gaming, and everyday use
 - **Lightweight** — the receiver is a single C binary under 300 lines, runs on a Pi Zero
 - **Zero-config** — receivers advertise via mDNS, the macOS setup app discovers them automatically
+- **Auto-appear/disappear** — Zinkos only shows up in Sound settings when a receiver is on the network
 - **DHCP-safe** — stores mDNS hostnames, not IPs — survives DHCP lease changes
 
 ## How It Works
@@ -159,11 +160,20 @@ zinkos rebuild      # compile, validate, install, reload
 zinkos reload       # restart coreaudiod
 ```
 
+## Dynamic Device Visibility
+
+Zinkos only appears as a sound output when a receiver is actually available on the network. No more dead device in the menu when your Pi is off.
+
+- **Bonjour discovery:** The driver browses for `_zinkos._udp` services. When a receiver is found, the device appears in Sound settings. When it disappears, the device is removed.
+- **Grace period:** Brief WiFi hiccups won't yank the device — there's a 3-second grace period before unpublishing. If the receiver comes back within that window, nothing changes.
+- **Manual IP override:** If you set a receiver IP via `zinkos set ip` or the setup app, the device always appears regardless of Bonjour. Backward compatible.
+- **Clean disconnect:** If the receiver goes away while audio is playing, macOS switches to the default output automatically (same as unplugging a USB DAC).
+
 ## Architecture
 
 | Component | Language | Role |
 |-----------|----------|------|
-| Driver shim | C++ | CoreAudio plugin interface (Apple requires C/C++) |
+| Driver shim | C++ | CoreAudio plugin interface, Bonjour discovery (Apple requires C/C++) |
 | Engine | Rust | Ring buffer, packetizer, UDP sender, drift estimation |
 | Receiver | C | UDP recv, jitter buffer, ALSA playback |
 | Setup app | Swift | Bonjour discovery, config UI, coreaudiod reload |
@@ -215,6 +225,7 @@ Fixed across the entire pipeline — no negotiation, no codecs:
 - ~~Bonjour/mDNS auto-discovery (no manual IP config)~~ Done
 - ~~macOS Swift setup app~~ Done
 - ~~Configurable frame size and receiver buffering~~ Done (~9ms achievable)
+- ~~Dynamic device visibility (device appears/disappears based on receiver availability)~~ Done
 - Multi-room / multi-receiver support
 - Forward error correction (FEC) for lossy networks
 - Pre-built signed installer (no Xcode or developer certificate needed)

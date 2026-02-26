@@ -97,7 +97,7 @@ Chosen for simplicity. One format everywhere — no codec negotiation, no resamp
 | **DSCP / QoS** | Differentiated Services Code Point — a flag in the IP packet header that tells network equipment to prioritize this traffic. Zinkos marks packets as "Expedited Forwarding" (EF), the highest priority class. Helps on managed networks; most home routers ignore it. |
 | **PPM** | Parts Per Million. Used to measure clock drift. A 50 PPM drift between two 48kHz clocks means one produces 48000 samples/second while the other produces 48002.4 — a difference of 2.4 frames/second. |
 | **Frame size** | The number of audio frames per UDP packet. Called "period" in ALSA terminology. Configurable in the setup app — smaller values reduce latency but increase packet rate. Default 240 (5ms), tuned 100 (~2ms). |
-| **mDNS / Bonjour** | Multicast DNS — a protocol for discovering services on a local network without a central server. Apple's implementation is called Bonjour. Devices announce "I'm here, I offer this service" and others can find them automatically. Zinkos receivers advertise via `_zinkos._udp` and the macOS setup app discovers them automatically. |
+| **mDNS / Bonjour** | Multicast DNS — a protocol for discovering services on a local network without a central server. Apple's implementation is called Bonjour. Devices announce "I'm here, I offer this service" and others can find them automatically. Zinkos receivers advertise via `_zinkos._udp`. The driver browses for this service type and dynamically shows/hides the audio device based on receiver availability. |
 
 ## Why Rust + C++?
 
@@ -137,6 +137,7 @@ A macOS CoreAudio AudioServerPlugIn — the only way to appear as a system audio
 
 **What it does:**
 - Registers "Zinkos" as an output device in macOS Sound preferences
+- Browses for `_zinkos._udp` receivers via Bonjour (`dns_sd.h`) and dynamically publishes/unpublishes the device
 - Receives mixed system audio from CoreAudio as Float32 samples
 - Applies volume (quadratic perceptual curve) and converts to S16LE
 - Hands samples to the Rust engine via FFI
@@ -144,7 +145,7 @@ A macOS CoreAudio AudioServerPlugIn — the only way to appear as a system audio
 - Persists volume/mute state to survive coreaudiod restarts
 
 **What it explicitly does NOT do:**
-- Any networking
+- Any audio networking (that's the Rust engine)
 - Any buffering logic
 - Any real-time decisions
 
@@ -333,6 +334,50 @@ What **requires** loading the driver:
 - Real IO callback timing
 - End-to-end latency measurement
 - System sleep/wake behavior
+
+## Dynamic Device Visibility (Bonjour)
+
+The Zinkos device only appears in macOS Sound settings when a receiver is actually available. This prevents a dead device sitting in the output list when no receiver is on the network.
+
+### How It Works
+
+The driver's C++ shim runs a Bonjour browse for `_zinkos._udp` services using Apple's native `dns_sd.h` API. The browse runs on a dedicated background thread with a `select()` loop.
+
+**Discovery chain:** `DNSServiceBrowse` → `BrowseCallback` (found/lost) → `DNSServiceResolve` → `ResolveCallback` (hostname + port) → `DNSServiceGetAddrInfo` → `AddrInfoCallback` (IP address) → store in driver state → publish device.
+
+**Publishing/unpublishing:** Sets `devicePublished` and calls `PropertiesChanged()` on the plugin object for `kAudioPlugInPropertyDeviceList` and `kAudioObjectPropertyOwnedObjects`. CoreAudio re-queries the device list and the device appears or disappears from Sound settings.
+
+### Manual IP Override
+
+If the plist has a `ReceiverIP` set (via `zinkos set ip` or the setup app), the device publishes immediately on driver load and Bonjour browsing is skipped entirely. Full backward compatibility — manual IP always works regardless of mDNS.
+
+### Grace Period
+
+WiFi networks cause frequent mDNS flaps (brief remove + re-add events). To avoid the device flickering in and out of Sound settings, there's a **3-second grace period** before unpublishing. If the receiver reappears within the window, the pending unpublish is cancelled — no disruption to the user.
+
+### When the Receiver Truly Disappears
+
+After the 3-second grace period expires with no re-discovery, the device is unpublished even if audio is actively playing. CoreAudio handles this gracefully (same as unplugging a USB DAC) — it calls StopIO on the driver and switches to the default output device.
+
+### DNS-SD Connection Recovery
+
+If the connection to mDNSResponder is lost (daemon restart during network changes), the browse thread:
+1. Immediately unpublishes the device (no grace period — the connection is genuinely broken)
+2. Retries the browse connection with 2-second backoff, up to 10 attempts
+3. On successful reconnect, resumes normal browse/discovery
+
+### Thread Safety
+
+- The browse thread writes `discoveredIP`/`discoveredPort` then sets `discoveredAvailable` (atomic release)
+- CoreAudio threads read `devicePublished` (atomic acquire) for property queries
+- `PublishDevice` calls `PropertiesChanged` which creates a happens-before for subsequent queries
+- No mutexes needed — all coordination via atomics and the browse thread's sequential callback processing
+
+### Files
+
+- `driver/ZinkosBrowse.h` / `driver/ZinkosBrowse.cpp` — Browse thread, callback chain, publish/unpublish
+- `driver/ZinkosPlugin.h` — `devicePublished`, `discoveredIP`, `discoveredPort`, `discoveredAvailable` fields
+- `driver/ZinkosDevice.cpp` — Device list conditional on `devicePublished`
 
 ## Volume Persistence
 
