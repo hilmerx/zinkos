@@ -77,8 +77,12 @@ static OSStatus GetPluginPropertySize(AudioObjectPropertySelector sel, UInt32* o
         case kAudioObjectPropertyClass:         RETURN_SIZE(AudioClassID);
         case kAudioObjectPropertyOwner:         RETURN_SIZE(AudioObjectID);
         case kAudioObjectPropertyManufacturer:  RETURN_SIZE(CFStringRef);
-        case kAudioObjectPropertyOwnedObjects:  RETURN_SIZE(AudioObjectID); // owns 1 device
-        case kAudioPlugInPropertyDeviceList:    RETURN_SIZE(AudioObjectID);
+        case kAudioObjectPropertyOwnedObjects:
+        case kAudioPlugInPropertyDeviceList:
+            // Only report the device when published (Bonjour discovered or manual IP)
+            *outDataSize = __c11_atomic_load((_Atomic bool*)&gDriverState.devicePublished, __ATOMIC_ACQUIRE)
+                ? sizeof(AudioObjectID) : 0;
+            return kAudioHardwareNoError;
         case kAudioPlugInPropertyTranslateUIDToDevice: RETURN_SIZE(AudioObjectID);
         case kAudioPlugInPropertyResourceBundle: RETURN_SIZE(CFStringRef);
         default: return kAudioHardwareUnknownPropertyError;
@@ -96,9 +100,12 @@ static OSStatus GetPluginProperty(AudioObjectPropertySelector sel, UInt32 inData
         case kAudioObjectPropertyManufacturer:
             return WriteCFString(outData, outDataSize, sManufacturer);
         case kAudioObjectPropertyOwnedObjects:
-            return WriteUInt32(outData, outDataSize, kObjectID_Device);
         case kAudioPlugInPropertyDeviceList:
-            return WriteUInt32(outData, outDataSize, kObjectID_Device);
+            if (__c11_atomic_load((_Atomic bool*)&gDriverState.devicePublished, __ATOMIC_ACQUIRE)) {
+                return WriteUInt32(outData, outDataSize, kObjectID_Device);
+            }
+            *outDataSize = 0;
+            return kAudioHardwareNoError;
         case kAudioPlugInPropertyTranslateUIDToDevice: {
             // Qualifier is a CFStringRef UID
             if (inQualifierDataSize == sizeof(CFStringRef)) {

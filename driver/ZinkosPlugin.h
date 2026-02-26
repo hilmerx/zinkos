@@ -3,6 +3,7 @@
 
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <stdatomic.h>
 #include "zinkos_engine.h"
 
 // Object IDs
@@ -41,6 +42,13 @@ struct ZinkosDriverState {
     uint16_t targetPort;      // receiver UDP port
     uint32_t latencyOffsetMs; // user-configurable latency offset
     uint32_t framesPerPacket; // frames per UDP packet (default 240 = 5ms @ 48kHz)
+
+    // Bonjour discovery state
+    _Atomic bool devicePublished;      // is device visible to CoreAudio?
+    bool manualIPConfigured;           // plist has a real (non-default) IP?
+    char discoveredIP[256];            // resolved IP from Bonjour
+    uint16_t discoveredPort;           // port from Bonjour
+    _Atomic bool discoveredAvailable;  // set by browse thread after resolve
 };
 
 // Global driver state (singleton — CoreAudio loads one instance)

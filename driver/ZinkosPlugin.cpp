@@ -6,8 +6,10 @@
 //
 
 #include "ZinkosPlugin.h"
+#include "ZinkosBrowse.h"
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <mach/mach_time.h>
 #include <os/log.h>
 
@@ -255,6 +257,9 @@ static ULONG ZinkosRelease(void* /*inDriver*/)
     if (gDriverState.refCount > 0) {
         gDriverState.refCount--;
     }
+    if (gDriverState.refCount == 0) {
+        ZinkosBrowse_Stop();
+    }
     os_log(sLog, "ZinkosRelease: refCount=%u", gDriverState.refCount);
     return gDriverState.refCount;
 }
@@ -280,6 +285,9 @@ static OSStatus ZinkosInitialize(AudioServerPlugInDriverRef /*inDriver*/, AudioS
 
     // Engine creation deferred to StartIO — Initialize runs in sandboxed
     // driver service context where network operations may be restricted.
+
+    // Start Bonjour browsing (or publish immediately if manual IP is set)
+    ZinkosBrowse_Start();
 
     os_log(sLog, "ZinkosInitialize: success, ticksPerFrame=%llu", gDriverState.ticksPerFrame);
     return kAudioHardwareNoError;
@@ -338,17 +346,27 @@ static OSStatus ZinkosStartIO(AudioServerPlugInDriverRef /*inDriver*/, AudioObje
         gDriverState.engine = nullptr;
     }
 
-    // Skip engine creation if no valid IP is configured — the driver still
-    // shows up as a device, IO callbacks still run (writing silence), but
-    // nothing is sent on the network. This prevents coreaudiod hangs.
-    if (strcmp(gDriverState.targetIP, "0.0.0.0") == 0 ||
-        gDriverState.targetIP[0] == '\0') {
+    // Determine which IP/port to use: manual config takes priority, then Bonjour discovery
+    const char* effectiveIP = gDriverState.targetIP;
+    uint16_t effectivePort = gDriverState.targetPort;
+
+    if ((strcmp(gDriverState.targetIP, "0.0.0.0") == 0 || gDriverState.targetIP[0] == '\0') &&
+        __c11_atomic_load((_Atomic bool*)&gDriverState.discoveredAvailable, __ATOMIC_ACQUIRE)) {
+        effectiveIP = gDriverState.discoveredIP;
+        effectivePort = gDriverState.discoveredPort;
+        os_log(sLog, "ZinkosStartIO: using Bonjour-discovered receiver %{public}s:%u",
+               effectiveIP, effectivePort);
+    }
+
+    // Skip engine creation if no valid IP is available — IO callbacks still
+    // run (writing silence), but nothing is sent on the network.
+    if (strcmp(effectiveIP, "0.0.0.0") == 0 || effectiveIP[0] == '\0') {
         os_log(sLog, "ZinkosStartIO: no receiver IP configured, running without network");
     } else {
-        gDriverState.engine = zinkos_engine_create(gDriverState.targetIP, gDriverState.targetPort, gDriverState.framesPerPacket);
+        gDriverState.engine = zinkos_engine_create(effectiveIP, effectivePort, gDriverState.framesPerPacket);
         if (!gDriverState.engine) {
             os_log_error(sLog, "ZinkosStartIO: failed to create engine for %{public}s:%u — running without network",
-                         gDriverState.targetIP, gDriverState.targetPort);
+                         effectiveIP, effectivePort);
         } else {
             int32_t ret = zinkos_engine_start(gDriverState.engine);
             if (ret != 0) {
@@ -357,7 +375,7 @@ static OSStatus ZinkosStartIO(AudioServerPlugInDriverRef /*inDriver*/, AudioObje
                 gDriverState.engine = nullptr;
             } else {
                 os_log(sLog, "ZinkosStartIO: streaming to %{public}s:%u",
-                       gDriverState.targetIP, gDriverState.targetPort);
+                       effectiveIP, effectivePort);
             }
         }
     }
@@ -381,6 +399,12 @@ static OSStatus ZinkosStopIO(AudioServerPlugInDriverRef /*inDriver*/, AudioObjec
     }
 
     gDriverState.ioRunning = false;
+
+    // If receiver disappeared during IO and no manual IP, unpublish now
+    if (!gDriverState.manualIPConfigured &&
+        !__c11_atomic_load((_Atomic bool*)&gDriverState.discoveredAvailable, __ATOMIC_ACQUIRE)) {
+        ZinkosBrowse_UnpublishDevice();
+    }
 
     // Force-save final volume (throttle may have skipped the last update)
     sLastPersistTime = 0;

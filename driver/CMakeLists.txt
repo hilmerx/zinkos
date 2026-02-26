@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 add_library(Zinkos MODULE
     ZinkosPlugin.cpp
     ZinkosDevice.cpp
+    ZinkosBrowse.cpp
 )
 
 add_dependencies(Zinkos zinkos_engine_build)
